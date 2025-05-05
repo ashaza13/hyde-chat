@@ -1,0 +1,143 @@
+UNIVERSITY OF EXAMPLE
+ANNUAL FINANCIAL REPORT
+For the Fiscal Year Ended June 30, 2023
+
+STATEMENT OF NET POSITION
+
+ASSETS
+Current Assets:
+  Cash and cash equivalents                    $  45,678,921
+  Short-term investments                         78,324,560
+  Accounts receivable, net                       12,456,789
+  Student loans receivable, net                   3,254,167
+  Inventories                                     1,987,432
+  Prepaid expenses                                2,145,698
+Total Current Assets                           $ 143,847,567
+
+Noncurrent Assets:
+  Restricted cash and cash equivalents         $  25,687,321
+  Endowment investments                         342,789,654
+  Other long-term investments                    87,654,321
+  Student loans receivable, net                  12,456,789
+  Capital assets, net                           789,456,123
+Total Noncurrent Assets                        $1,258,044,208
+
+TOTAL ASSETS                                   $1,401,891,775
+
+DEFERRED OUTFLOWS OF RESOURCES
+  Deferred loss on debt refunding              $   3,245,678
+  Deferred outflows related to pensions          45,678,912
+Total Deferred Outflows                        $  48,924,590
+
+LIABILITIES
+Current Liabilities:
+  Accounts payable                             $  23,456,789
+  Accrued liabilities                            12,345,678
+  Unearned revenue                               15,678,901
+  Long-term liabilities - current portion        18,765,432
+Total Current Liabilities                      $  70,246,800
+
+Noncurrent Liabilities:
+  Accrued compensated absences                 $   8,765,432
+  Net pension liability                         234,567,890
+  Bonds payable                                 165,432,789
+  Notes payable                                  45,678,912
+Total Noncurrent Liabilities                   $ 454,445,023
+
+TOTAL LIABILITIES                              $ 524,691,823
+
+DEFERRED INFLOWS OF RESOURCES
+  Deferred inflows related to pensions         $  12,345,678
+Total Deferred Inflows                         $  12,345,678
+
+NET POSITION
+  Net investment in capital assets             $ 612,345,678
+  Restricted - nonexpendable                     156,789,012
+  Restricted - expendable                         87,654,321
+  Unrestricted                                    56,989,853
+TOTAL NET POSITION                             $ 913,778,864
+
+STATEMENT OF REVENUES, EXPENSES, AND CHANGES IN NET POSITION
+
+OPERATING REVENUES
+  Student tuition and fees, net                $ 234,567,890
+  Federal grants and contracts                    56,789,012
+  State grants and contracts                      12,345,678
+  Local grants and contracts                       3,456,789
+  Nongovernmental grants and contracts            23,456,789
+  Sales and services of educational departments   34,567,890
+  Auxiliary enterprises                           78,901,234
+  Other operating revenues                         8,765,432
+Total Operating Revenues                       $ 452,850,714
+
+OPERATING EXPENSES
+  Instruction                                  $ 156,789,012
+  Research                                        87,654,321
+  Public service                                  12,345,678
+  Academic support                                45,678,901
+  Student services                                34,567,890
+  Institutional support                           56,789,012
+  Operation and maintenance of plant              67,890,123
+  Scholarships and fellowships                    34,567,890
+  Auxiliary enterprises                           78,901,234
+  Depreciation                                    45,678,901
+Total Operating Expenses                       $ 620,862,962
+
+Operating Loss                                 $(168,012,248)
+
+NONOPERATING REVENUES (EXPENSES)
+  State appropriations                         $ 123,456,789
+  Federal Pell grants                             45,678,901
+  Gifts                                           34,567,890
+  Investment income, net                          23,456,789
+  Interest expense                               (12,345,678)
+Net Nonoperating Revenues                      $ 214,814,691
+
+Income Before Other Revenues                   $  46,802,443
+
+  Capital appropriations                       $  23,456,789
+  Capital grants and gifts                        12,345,678
+  Additions to permanent endowments               10,987,654
+Total Other Revenues                           $  46,790,121
+
+INCREASE IN NET POSITION                       $  93,592,564
+
+NET POSITION
+  Net position - beginning of year             $ 820,186,300
+  Net position - end of year                   $ 913,778,864
+
+NOTES TO FINANCIAL STATEMENTS
+
+Note 1 - Summary of Significant Accounting Policies
+
+Reporting Entity
+The University of Example (the "University") is a public institution of higher education and is a component unit of the State of Example. The University is governed by a Board of Trustees appointed by the Governor of the State of Example.
+
+Financial Statement Presentation
+The University's financial statements have been prepared in accordance with accounting principles generally accepted in the United States of America as prescribed by the Governmental Accounting Standards Board (GASB).
+
+Basis of Accounting
+For financial reporting purposes, the University is considered a special-purpose government engaged only in business-type activities. Accordingly, the University's financial statements have been presented using the economic resources measurement focus and the accrual basis of accounting. Under the accrual basis, revenues are recognized when earned, and expenses are recorded when an obligation has been incurred.
+
+Cash Equivalents
+The University considers all highly liquid investments with an original maturity of three months or less to be cash equivalents.
+
+Investments
+Investments are reported at fair value in accordance with GASB Statement No. 72, Fair Value Measurement and Application.
+
+Capital Assets
+Capital assets are recorded at cost at the date of acquisition, or acquisition value at the date of donation in the case of gifts. For equipment, the University's capitalization policy includes all items with a unit cost of $5,000 or more and an estimated useful life of greater than one year. Renovations to buildings and land improvements that significantly increase the value or extend the useful life of the structure are capitalized. Routine repairs and maintenance are charged to operating expense in the year in which the expense is incurred.
+
+Depreciation is computed using the straight-line method over the estimated useful lives of the assets:
+- Buildings: 40 years
+- Infrastructure and land improvements: 20 years
+- Equipment: 5 to 15 years
+- Library materials: 10 years
+
+Note 2 - Compliance with GASB Standards
+
+The University has implemented all applicable GASB pronouncements, including GASB Statement No. 84, Fiduciary Activities, and GASB Statement No. 87, Leases, as of June 30, 2023.
+
+Note 3 - Single Audit Compliance
+
+The University has undergone a Single Audit in accordance with the Uniform Guidance. The Schedule of Expenditures of Federal Awards and related notes are available under separate cover. There were no material weaknesses or significant deficiencies identified in the Single Audit for the fiscal year ended June 30, 2023. 
