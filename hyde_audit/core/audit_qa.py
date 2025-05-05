@@ -15,7 +15,7 @@ class AuditQA:
     
     def __init__(
         self,
-        aws_region: str = "us-east-1",
+        aws_region: str = "us-gov-west-1",
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         model_config: Optional[BedrockModelConfig] = None,
@@ -42,17 +42,18 @@ class AuditQA:
         # Initialize the document processor
         self.document_processor = DocumentProcessor(embedding_model_name=embedding_model_name)
     
-    def load_document(self, file_path: Union[str, Path]) -> bool:
+    def load_document(self, bucket_name: str, key: str) -> bool:
         """
         Load a document for analysis.
         
         Args:
-            file_path: Path to the document file
+            bucket_name: Name of the S3 bucket
+            key: Key of the PDF file in the S3 bucket
             
         Returns:
             True if successful, False otherwise
         """
-        return self.document_processor.load_document(file_path)
+        return self.document_processor.load_document(bucket_name, key)
     
     def generate_hypothetical_document(self, question: str) -> str:
         """

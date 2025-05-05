@@ -2,6 +2,9 @@ import os
 from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
 import json
+from PyPDF2 import PdfReader
+import boto3
+import io
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -23,6 +26,8 @@ class DocumentProcessor:
         self.documents = []
         self.embeddings = []
         self.embedding_model_name = embedding_model_name
+
+        self.s3_client = boto3.client('s3', region_name='us-gov-west-1')
         
         # Initialize the embedding model if available
         if SENTENCE_TRANSFORMERS_AVAILABLE:
@@ -30,46 +35,55 @@ class DocumentProcessor:
         else:
             self.embedding_model = None
             print("Warning: sentence-transformers not available. Install with 'pip install sentence-transformers'")
+
+    def download_pdf(self, bucket_name, key):
+        """
+        Download a PDF file from S3 and return the content as a string.
+
+        Args:
+            bucket_name: Name of the S3 bucket
+            key: Key of the PDF file in the S3 bucket
+            
+        Returns:
+            Content of the PDF file as a string
+        """
+        response = self.s3_client.get_object(Bucket=bucket_name, Key=key)
+        pdf_content = response['Body'].read()
+        return io.BytesIO(pdf_content)
+            
     
-    def load_document(self, file_path: Union[str, Path]) -> bool:
+    def load_document(self, bucket_name: str, key: str) -> bool:
         """
         Load a document from a file.
         
         Args:
-            file_path: Path to the document file
+            bucket_name: Name of the S3 bucket
+            key: Key of the PDF file in the S3 bucket
             
         Returns:
             True if successful, False otherwise
         """
-        file_path = Path(file_path)
-        
-        if not file_path.exists():
-            print(f"Error: File {file_path} does not exist")
+        try:
+            pdf_bytes = self.download_pdf(bucket_name, key)
+            pdf_reader = PdfReader(pdf_bytes)
+            content = ""
+            for page in pdf_reader.pages:
+                content += page.extract_text()
+            
+            # Split into chunks - simple approach, can be improved
+            chunks = self._chunk_text(content)
+            self.documents.extend(chunks)
+            
+            # Create embeddings if model is available
+            if self.embedding_model is not None:
+                new_embeddings = self.embedding_model.encode(chunks)
+                self.embeddings.extend(new_embeddings)
+            
+            return True
+        except Exception as e:
+            print(f"Error loading document: {e}")
             return False
-        
-        # Currently support simple text files
-        # TODO: Add support for PDF, Excel, etc. using appropriate libraries
-        if file_path.suffix.lower() in ['.txt', '.md']:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                
-                # Split into chunks - simple approach, can be improved
-                chunks = self._chunk_text(content)
-                self.documents.extend(chunks)
-                
-                # Create embeddings if model is available
-                if self.embedding_model is not None:
-                    new_embeddings = self.embedding_model.encode(chunks)
-                    self.embeddings.extend(new_embeddings)
-                
-                return True
-            except Exception as e:
-                print(f"Error loading document: {e}")
-                return False
-        else:
-            print(f"Unsupported file type: {file_path.suffix}")
-            return False
+
     
     def _chunk_text(self, text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
         """

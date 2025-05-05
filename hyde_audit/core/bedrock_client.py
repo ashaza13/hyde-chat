@@ -9,7 +9,7 @@ class BedrockClient:
     
     def __init__(
         self,
-        aws_region: str = "us-east-1",
+        aws_region: str = "us-gov-west-1",
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         model_config: Optional[BedrockModelConfig] = None
