@@ -5,6 +5,7 @@ Example showing how to use the TextractProcessor to extract text and tables from
 
 import os
 import argparse
+import json
 from textract_processor import TextractProcessor
 
 def main():
@@ -16,6 +17,7 @@ def main():
     parser.add_argument('--aws-region', default='us-east-1', help='AWS region to use')
     parser.add_argument('--bucket', help='S3 bucket for large files (>5MB)')
     parser.add_argument('--output', help='Output file (markdown format)')
+    parser.add_argument('--debug', action='store_true', help='Show detailed debug information')
     parser.add_argument('--no-tables', action='store_true', help='Skip table extraction')
     args = parser.parse_args()
     
@@ -63,6 +65,30 @@ def main():
         tables = result.tables
         print(f"Extracted {len(tables)} tables")
         
+        # Debug table information
+        if args.debug and tables:
+            print("\nTable Details:")
+            for i, table in enumerate(tables):
+                print(f"\nTable {i+1}:")
+                print(f"  Page: {table.page}")
+                print(f"  Rows: {table.row_count}")
+                print(f"  Columns: {table.column_count}")
+                print(f"  Cells: {len(table.cells)}")
+                
+                # Print cell details for first few cells
+                if table.cells:
+                    print("\n  Sample Cells:")
+                    for j, cell in enumerate(table.cells[:5]):  # Show first 5 cells
+                        print(f"    Cell {j+1}: Row {cell.row_index}, Col {cell.column_index}, Text: '{cell.text}'")
+                    
+                    if len(table.cells) > 5:
+                        print(f"    ... and {len(table.cells) - 5} more cells")
+                        
+                # Show table as markdown
+                print("\n  Markdown Representation:")
+                markdown = table.to_markdown()
+                print(f"    {markdown.replace(chr(10), chr(10)+'    ')}")
+        
         # Get combined content with tables
         combined_content = result.get_text_with_tables()
         print(f"Combined content is {len(combined_content)} characters")
@@ -76,7 +102,11 @@ def main():
             # Print a sample of the output
             print("\nSample of extracted content:")
             print("----------------------------")
-            print(combined_content[:1000] + "..." if len(combined_content) > 1000 else combined_content)
+            sample_length = 1000
+            if len(combined_content) > sample_length:
+                print(combined_content[:sample_length] + "...")
+            else:
+                print(combined_content)
             
             if tables:
                 print("\nSample of first table as markdown:")
@@ -86,7 +116,10 @@ def main():
         print("\nDone!")
         
     except Exception as e:
+        import traceback
         print(f"Error processing document: {e}")
+        if args.debug:
+            traceback.print_exc()
 
 if __name__ == "__main__":
     main() 

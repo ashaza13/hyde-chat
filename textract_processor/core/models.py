@@ -61,21 +61,39 @@ class TableBlock:
         Returns:
             String representation of the table in markdown format
         """
+        # Check if we have any cells
+        if not self.cells or self.row_count <= 0 or self.column_count <= 0:
+            return ""  # Return empty string if no valid cells
+            
         # Create empty grid based on row_count and column_count
         grid = [['' for _ in range(self.column_count)] for _ in range(self.row_count)]
         
         # Fill grid with cell values
         for cell in self.cells:
+            # Skip cells with invalid indices
+            if (cell.row_index < 0 or cell.row_index >= self.row_count or 
+                cell.column_index < 0 or cell.column_index >= self.column_count):
+                continue
+                
             # Account for spans by filling all spanned cells with the same value
             for r in range(cell.row_span):
                 for c in range(cell.column_span):
                     if (cell.row_index + r < self.row_count and 
                         cell.column_index + c < self.column_count):
-                        grid[cell.row_index + r][cell.column_index + c] = cell.text
+                        grid[cell.row_index + r][cell.column_index + c] = cell.text.strip()
         
         # Convert grid to markdown
         markdown_rows = []
         
+        # Check if grid is empty
+        if not grid or len(grid) == 0:
+            return ""
+            
+        # Check if any of the rows has content
+        has_content = any(any(cell.strip() for cell in row) for row in grid)
+        if not has_content:
+            return ""
+            
         # Header row
         header = '| ' + ' | '.join(grid[0]) + ' |'
         markdown_rows.append(header)
@@ -136,12 +154,21 @@ class TextractResult:
             key=lambda t: (t.page, t.bounding_box.top if t.bounding_box else 0)
         )
         
+        # Filter out empty tables
+        tables = [t for t in tables if t.cells and t.row_count > 0 and t.column_count > 0]
+        
+        # Debug info
+        if not tables:
+            result.append("Note: No tables were detected or all tables were empty.")
+        
         # Merge text and tables in order of appearance
         while text_pointer < len(text_blocks) or tables:
             # If we've processed all text blocks but still have tables
             if text_pointer >= len(text_blocks):
                 for table in tables:
-                    result.append(f"\n{table.to_markdown()}\n")
+                    markdown_table = table.to_markdown()
+                    if markdown_table:
+                        result.append(f"\n{markdown_table}\n")
                 tables = []
                 continue
                 
@@ -153,7 +180,9 @@ class TextractResult:
                 # If the table appears before the text block
                 if (table.bounding_box and current_text_block.bounding_box and 
                     table.bounding_box.top < current_text_block.bounding_box.top):
-                    result.append(f"\n{table.to_markdown()}\n")
+                    markdown_table = table.to_markdown()
+                    if markdown_table:
+                        result.append(f"\n{markdown_table}\n")
                     tables.pop(0)
                 else:
                     result.append(current_text_block.text)
