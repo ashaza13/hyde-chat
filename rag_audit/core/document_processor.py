@@ -8,6 +8,8 @@ import io
 import numpy as np
 from scipy.spatial.distance import cosine
 
+from textract_processor import TextractProcessor, TextractResult
+
 try:
     from sentence_transformers import SentenceTransformer
     SENTENCE_TRANSFORMERS_AVAILABLE = True
@@ -18,17 +20,20 @@ except ImportError:
 class DocumentProcessor:
     """Class for processing financial documents and performing RAG operations."""
     
-    def __init__(self, embedding_model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, embedding_model_name: str = "all-MiniLM-L6-v2", aws_region: str = "us-gov-west-1"):
         """
         Initialize the DocumentProcessor.
         
         Args:
             embedding_model_name: Name of the SentenceTransformer model to use for embeddings
+            aws_region: AWS region to use
         """
         self.documents = []
         self.embeddings = []
         self.embedding_model_name = embedding_model_name
-        self.s3_client = boto3.client('s3', region_name='us-gov-west-1')
+        self.s3_client = boto3.client('s3', region_name=aws_region)
+        self.textract_processor = TextractProcessor(aws_region=aws_region)
+        self.textract_result = None
         
         # Initialize the embedding model if available
         if SENTENCE_TRANSFORMERS_AVAILABLE:
@@ -64,11 +69,26 @@ class DocumentProcessor:
             True if successful, False otherwise
         """
         try:
-            pdf_bytes = self.download_pdf(bucket_name, key)
-            pdf_reader = PdfReader(pdf_bytes)
-            content = ""
-            for page in pdf_reader.pages:
-                content += page.extract_text()
+            # First try to process with Textract
+            try:
+                self.textract_result = self.textract_processor.process_document(
+                    bucket_name=bucket_name,
+                    key=key,
+                    extract_tables=True
+                )
+                
+                # Get text with tables converted to markdown
+                content = self.textract_result.get_text_with_tables()
+                
+            except Exception as e:
+                print(f"Error using Textract: {e}. Falling back to PyPDF2.")
+                
+                # Fall back to PyPDF2 if Textract fails
+                pdf_bytes = self.download_pdf(bucket_name, key)
+                pdf_reader = PdfReader(pdf_bytes)
+                content = ""
+                for page in pdf_reader.pages:
+                    content += page.extract_text()
             
             # Split into chunks
             chunks = self._chunk_text(content)
