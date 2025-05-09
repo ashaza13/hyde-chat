@@ -161,6 +161,18 @@ class TextractResult:
         if not tables:
             result.append("Note: No tables were detected or all tables were empty.")
         
+        # Create a set to track text blocks that should be excluded (those within table bounds)
+        excluded_text_blocks = set()
+        
+        # Mark text blocks that overlap with tables as excluded
+        for table in tables:
+            if table.bounding_box:
+                for i, text_block in enumerate(text_blocks):
+                    if (text_block.bounding_box and 
+                        text_block.page == table.page and
+                        self._is_block_within_table(text_block, table)):
+                        excluded_text_blocks.add(i)
+        
         # Merge text and tables in order of appearance
         while text_pointer < len(text_blocks) or tables:
             # If we've processed all text blocks but still have tables
@@ -173,6 +185,11 @@ class TextractResult:
                 continue
                 
             current_text_block = text_blocks[text_pointer]
+            
+            # Skip this text block if it's been marked as part of a table
+            if text_pointer in excluded_text_blocks:
+                text_pointer += 1
+                continue
             
             # If we have tables on the current page
             if tables and tables[0].page == current_text_block.page:
@@ -191,4 +208,27 @@ class TextractResult:
                 result.append(current_text_block.text)
                 text_pointer += 1
         
-        return '\n'.join(result) 
+        return '\n'.join(result)
+    
+    def _is_block_within_table(self, text_block: TextBlock, table: TableBlock) -> bool:
+        """
+        Check if a text block is within the bounds of a table
+        
+        Args:
+            text_block: The text block to check
+            table: The table to check against
+            
+        Returns:
+            True if the text block is within the bounds of the table
+        """
+        if not text_block.bounding_box or not table.bounding_box:
+            return False
+            
+        tb_box = text_block.bounding_box
+        table_box = table.bounding_box
+        
+        # Check if the text block is completely within the table bounds
+        return (tb_box.left >= table_box.left and
+                tb_box.top >= table_box.top and
+                tb_box.left + tb_box.width <= table_box.left + table_box.width and
+                tb_box.top + tb_box.height <= table_box.top + table_box.height) 
