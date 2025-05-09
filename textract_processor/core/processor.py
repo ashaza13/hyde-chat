@@ -280,6 +280,16 @@ class TextractProcessor:
         # Create dictionaries to store blocks by ID for easy lookup
         block_map = {block.get('Id'): block for block in blocks}
         
+        # Create a reverse mapping from child blocks to parent blocks
+        # This helps us find the table that a cell belongs to, even without ParentId
+        child_to_parent = {}
+        for block in blocks:
+            if 'Relationships' in block:
+                for rel in block['Relationships']:
+                    if rel['Type'] == 'CHILD':
+                        for child_id in rel['Ids']:
+                            child_to_parent[child_id] = block['Id']
+        
         text_blocks = []
         tables = []
         table_cells = {}  # Map table ID to list of cells
@@ -302,7 +312,7 @@ class TextractProcessor:
         for block_type, count in block_types.items():
             print(f"  {block_type}: {count}")
         
-        # First pass - collect text blocks and table/cell blocks
+        # First pass - collect text blocks and table blocks
         for block in blocks:
             block_id = block.get('Id')
             block_type = block.get('BlockType')
@@ -327,6 +337,11 @@ class TextractProcessor:
                         top=bb.get('Top', 0)
                     )
                 
+                # Find parent ID through relationships map if not directly available
+                parent_id = None
+                if block_id in child_to_parent:
+                    parent_id = child_to_parent[block_id]
+                
                 # Create text block
                 text_block = TextBlock(
                     id=block_id,
@@ -335,7 +350,7 @@ class TextractProcessor:
                     confidence=block.get('Confidence', 0),
                     page=page,
                     bounding_box=bounding_box,
-                    parent_id=block.get('ParentId')
+                    parent_id=parent_id
                 )
                 
                 text_blocks.append(text_block)
@@ -370,17 +385,42 @@ class TextractProcessor:
                 
                 tables.append(table)
                 table_cells[block_id] = []
-            
-            # Process cell block
-            elif block_type == 'CELL':
-                parent_id = block.get('ParentId')
+        
+        # Second pass - find all cells and associate them with tables
+        for block in blocks:
+            if block.get('BlockType') == 'CELL':
+                cell_id = block.get('Id')
+                
+                # Find the parent table ID - either from ParentId, Relationships or our child_to_parent map
+                parent_table_id = None
+                
+                # Try to find table ID from the child_to_parent map
+                if cell_id in child_to_parent:
+                    parent_block_id = child_to_parent[cell_id]
+                    parent_block = block_map.get(parent_block_id)
+                    if parent_block and parent_block.get('BlockType') == 'TABLE':
+                        parent_table_id = parent_block_id
+                
+                # If we still don't have a parent table ID, try to find it by looking at table relationships
+                if not parent_table_id:
+                    for table_block in [b for b in blocks if b.get('BlockType') == 'TABLE']:
+                        if 'Relationships' in table_block:
+                            for rel in table_block['Relationships']:
+                                if rel['Type'] == 'CHILD' and cell_id in rel['Ids']:
+                                    parent_table_id = table_block['Id']
+                                    break
+                
+                # Skip if we can't associate with a table
+                if not parent_table_id or parent_table_id not in table_cells:
+                    print(f"Warning: Cell {cell_id} has no parent table or parent table not found")
+                    continue
                 
                 # Get page number
                 page = 1
                 if 'Page' in block:
                     page = block.get('Page', 1)
                 
-                # Get cell position and span
+                # Get cell position and span information
                 row_index = block.get('RowIndex', 1) - 1  # 0-indexed
                 column_index = block.get('ColumnIndex', 1) - 1  # 0-indexed
                 row_span = block.get('RowSpan', 1)
@@ -414,23 +454,45 @@ class TextractProcessor:
                 # If no text found from direct children, try to find text within the cell bounds
                 if not cell_text and bounding_box:
                     # Find all WORD blocks that might be inside this cell
-                    for other_id, other_block in block_map.items():
-                        if other_block.get('BlockType') == 'WORD' and 'Geometry' in other_block and 'BoundingBox' in other_block['Geometry']:
-                            other_bb = other_block['Geometry']['BoundingBox']
+                    for word_block in [b for b in blocks if b.get('BlockType') == 'WORD' and 'Geometry' in b]:
+                        if 'BoundingBox' not in word_block['Geometry']:
+                            continue
+                        
+                        word_bb = word_block['Geometry']['BoundingBox']
+                        
+                        # Convert word_bb to an object with properties like bounding_box for easier comparison
+                        word_bb_obj = {
+                            'left': word_bb.get('Left', 0),
+                            'top': word_bb.get('Top', 0),
+                            'width': word_bb.get('Width', 0),
+                            'height': word_bb.get('Height', 0)
+                        }
+                        
+                        # Check if the word is inside the cell bounds
+                        if (word_bb_obj['left'] >= bounding_box.left and 
+                            word_bb_obj['top'] >= bounding_box.top and
+                            word_bb_obj['left'] + word_bb_obj['width'] <= bounding_box.left + bounding_box.width and
+                            word_bb_obj['top'] + word_bb_obj['height'] <= bounding_box.top + bounding_box.height):
                             
-                            # Check if the word is inside the cell bounds
-                            if (other_bb['Left'] >= bounding_box.left and 
-                                other_bb['Top'] >= bounding_box.top and
-                                other_bb['Left'] + other_bb['Width'] <= bounding_box.left + bounding_box.width and
-                                other_bb['Top'] + other_bb['Height'] <= bounding_box.top + bounding_box.height):
-                                
-                                # Add the word text
-                                if 'Text' in other_block:
-                                    cell_text += other_block['Text'] + " "
+                            # Add the word text
+                            if 'Text' in word_block:
+                                cell_text += word_block['Text'] + " "
+                
+                # If STILL no text, check if this cell is referenced in a MERGED_CELL
+                if not cell_text:
+                    for merged_cell_block in [b for b in blocks if b.get('BlockType') == 'MERGED_CELL']:
+                        if 'Relationships' in merged_cell_block and merged_cell_block.get('RowIndex') == row_index + 1 and merged_cell_block.get('ColumnIndex') == column_index + 1:
+                            for rel in merged_cell_block['Relationships']:
+                                if rel['Type'] == 'CHILD':
+                                    for child_id in rel['Ids']:
+                                        if child_id in block_map:
+                                            child_block = block_map[child_id]
+                                            if child_block.get('BlockType') == 'WORD' and 'Text' in child_block:
+                                                cell_text += child_block['Text'] + " "
                 
                 # Create cell block
                 cell = CellBlock(
-                    id=block_id,
+                    id=cell_id,
                     row_index=row_index,
                     column_index=column_index,
                     row_span=row_span,
@@ -442,19 +504,21 @@ class TextractProcessor:
                 )
                 
                 # Add to table cells
-                if parent_id in table_cells:
-                    table_cells[parent_id].append(cell)
+                table_cells[parent_table_id].append(cell)
         
-        # Second pass - associate cells with tables and compute table dimensions
+        # Third pass - associate cells with tables and compute table dimensions
         for table in tables:
             if table.id in table_cells:
                 cells = table_cells[table.id]
+                print(f"Table {table.id}: Found {len(cells)} cells")
                 
                 # Only keep the table if it has cells
                 if cells:
                     # Find max row and column indices to determine table dimensions
-                    max_row_index = max((c.row_index + c.row_span) for c in cells)
-                    max_col_index = max((c.column_index + c.column_span) for c in cells)
+                    max_row_index = max((c.row_index + c.row_span) for c in cells) if cells else 0
+                    max_col_index = max((c.column_index + c.column_span) for c in cells) if cells else 0
+                    
+                    print(f"Table dimensions: {max_row_index} rows x {max_col_index} columns")
                     
                     # Set table dimensions
                     table.row_count = max_row_index
@@ -465,10 +529,31 @@ class TextractProcessor:
                     
                     # Add to table
                     table.cells = cells
+                    
+                    # Debug first few cells
+                    for i, cell in enumerate(cells[:5]):
+                        print(f"  Cell {i}: Row {cell.row_index}, Col {cell.column_index}, Text: '{cell.text[:20]}...' if len(cell.text) > 20 else cell.text")
         
         # Only keep tables that have cells and dimensions
         original_tables_count = len(tables)
         tables = [t for t in tables if t.cells and t.row_count > 0 and t.column_count > 0]
         print(f"Keeping {len(tables)} out of {original_tables_count} tables that have valid cells and dimensions")
+        
+        # Dump sample of first table for debugging
+        if tables:
+            first_table = tables[0]
+            print(f"First table: {first_table.row_count} rows x {first_table.column_count} columns")
+            print(f"First table has {len(first_table.cells)} cells")
+            
+            # Create a grid visualization of the first table
+            grid = [['' for _ in range(first_table.column_count)] for _ in range(first_table.row_count)]
+            for cell in first_table.cells:
+                if (cell.row_index < first_table.row_count and 
+                    cell.column_index < first_table.column_count):
+                    grid[cell.row_index][cell.column_index] = cell.text[:10] + '...' if len(cell.text) > 10 else cell.text
+            
+            print("Table grid preview:")
+            for row in grid:
+                print(" | ".join([f"'{cell}'" for cell in row]))
         
         return TextractResult(text_blocks=text_blocks, tables=tables) 
