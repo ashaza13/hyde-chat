@@ -8,12 +8,13 @@ This repository contains packages for answering financial audit questions using 
 
 All packages return structured responses with "Yes", "No", or "N/A" answers along with explanations.
 
-## New Feature: AWS Textract Integration
+## New Feature: AWS Textract Integration with AnalyzeDocument API
 
-The packages now include enhanced document processing capabilities using AWS Textract:
+The packages now include enhanced document processing capabilities using AWS Textract's AnalyzeDocument API:
 
-- Extracts both text and tables from PDF documents
+- Extracts both text and tables from PDF documents with high accuracy
 - Preserves table structure by converting tables to markdown format
+- Uses the AnalyzeDocument API specifically to better extract table data
 - Integrates with all three approaches (PDF Memory, RAG, and Hyde)
 - Falls back to PyPDF2 if Textract processing fails
 
@@ -25,7 +26,7 @@ pip install -r requirements.txt
 
 ## AWS Textract Processor
 
-The Textract processor can be used directly to extract text and tables from PDF documents:
+The Textract processor can be used directly to extract text and tables from PDF documents using the AnalyzeDocument API:
 
 ```python
 from textract_processor import TextractProcessor
@@ -37,10 +38,16 @@ processor = TextractProcessor(
     aws_secret_access_key="YOUR_SECRET_KEY"  # Optional if using IAM roles
 )
 
-# Process a document in S3
+# Process a document in S3 (uses StartDocumentAnalysis API for larger files)
 result = processor.process_document(
     bucket_name="your-bucket",
     key="path/to/document.pdf",
+    extract_tables=True
+)
+
+# Process a local document (uses AnalyzeDocument API for small files)
+result = processor.process_local_document(
+    file_path="path/to/local/document.pdf",
     extract_tables=True
 )
 
@@ -61,13 +68,13 @@ combined_content = result.get_text_with_tables()
 You can also process local PDF files:
 
 ```python
-# For files less than 5MB
+# For files less than 5MB (uses synchronous AnalyzeDocument API)
 result = processor.process_local_document(
     file_path="path/to/local/document.pdf",
     extract_tables=True
 )
 
-# For files larger than 5MB (requires S3 upload)
+# For files larger than 5MB (requires S3 upload, uses StartDocumentAnalysis API)
 result = processor.process_local_document(
     file_path="path/to/large/document.pdf",
     extract_tables=True,

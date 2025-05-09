@@ -64,15 +64,15 @@ class TextractProcessor:
         Returns:
             TextractResult with extracted text and tables
         """
-        # Start asynchronous text and table extraction job
-        job_id = self._start_extraction_job(bucket_name, key, extract_tables)
+        # Start asynchronous document analysis job
+        job_id = self._start_analysis_job(bucket_name, key, extract_tables)
         
         # Wait for job to complete
         response = self._wait_for_job_completion(job_id)
         
         # Process results
         if response['JobStatus'] == 'SUCCEEDED':
-            return self._process_extraction_results(job_id)
+            return self._process_analysis_results(job_id)
         else:
             raise Exception(f"Textract job failed with status: {response['JobStatus']}")
     
@@ -98,13 +98,15 @@ class TextractProcessor:
         
         # For files less than 5MB, we can use synchronous API
         if file_size < 5 * 1024 * 1024:
+            print(f"Using synchronous AnalyzeDocument API for file under 5MB")
             with open(file_path, 'rb') as file:
                 file_bytes = file.read()
             
-            return self._process_document_bytes(file_bytes, extract_tables)
+            return self._analyze_document_bytes(file_bytes, extract_tables)
         
         # For larger files, we need to upload to S3 and use asynchronous API
         elif upload_bucket:
+            print(f"Using asynchronous StartDocumentAnalysis API for file over 5MB")
             # Upload file to S3
             s3_key = f"textract-processor-uploads/{file_name}"
             self.s3_client.upload_file(file_path, upload_bucket, s3_key)
@@ -119,13 +121,13 @@ class TextractProcessor:
         else:
             raise ValueError("Files larger than 5MB require an S3 bucket for processing. Please provide upload_bucket.")
     
-    def _process_document_bytes(
+    def _analyze_document_bytes(
         self, 
         document_bytes: bytes,
         extract_tables: bool = True
     ) -> TextractResult:
         """
-        Process document bytes using synchronous Textract API.
+        Process document bytes using synchronous Textract AnalyzeDocument API.
         
         Args:
             document_bytes: PDF document as bytes
@@ -137,53 +139,42 @@ class TextractProcessor:
         # List of all detected blocks
         all_blocks = []
         
-        # Call Textract API for document analysis if tables needed
-        if extract_tables:
+        # Define the features to analyze
+        feature_types = ['TABLES']
+        
+        # Always use AnalyzeDocument API since it can handle both text and tables
+        print("Calling AnalyzeDocument API...")
+        response = self.textract_client.analyze_document(
+            Document={'Bytes': document_bytes},
+            FeatureTypes=feature_types
+        )
+        all_blocks.extend(response['Blocks'])
+        
+        # Handle pagination if needed
+        next_token = response.get('NextToken')
+        while next_token:
+            print(f"Getting next page of results with token: {next_token[:10]}...")
             response = self.textract_client.analyze_document(
                 Document={'Bytes': document_bytes},
-                FeatureTypes=['TABLES']
+                FeatureTypes=feature_types,
+                NextToken=next_token
             )
             all_blocks.extend(response['Blocks'])
-            
-            # Handle pagination if needed
             next_token = response.get('NextToken')
-            while next_token:
-                response = self.textract_client.analyze_document(
-                    Document={'Bytes': document_bytes},
-                    FeatureTypes=['TABLES'],
-                    NextToken=next_token
-                )
-                all_blocks.extend(response['Blocks'])
-                next_token = response.get('NextToken')
         
-        # Otherwise just detect text
-        else:
-            response = self.textract_client.detect_document_text(
-                Document={'Bytes': document_bytes}
-            )
-            all_blocks.extend(response['Blocks'])
-            
-            # Handle pagination if needed
-            next_token = response.get('NextToken')
-            while next_token:
-                response = self.textract_client.detect_document_text(
-                    Document={'Bytes': document_bytes},
-                    NextToken=next_token
-                )
-                all_blocks.extend(response['Blocks'])
-                next_token = response.get('NextToken')
+        print(f"Total blocks from AnalyzeDocument: {len(all_blocks)}")
         
         # Process blocks into structured result
         return self._parse_blocks(all_blocks)
     
-    def _start_extraction_job(
+    def _start_analysis_job(
         self, 
         bucket_name: str, 
         key: str,
         extract_tables: bool = True
     ) -> str:
         """
-        Start an asynchronous Textract job.
+        Start an asynchronous Textract document analysis job.
         
         Args:
             bucket_name: S3 bucket name
@@ -193,25 +184,20 @@ class TextractProcessor:
         Returns:
             Job ID of the Textract job
         """
-        if extract_tables:
-            response = self.textract_client.start_document_analysis(
-                DocumentLocation={
-                    'S3Object': {
-                        'Bucket': bucket_name,
-                        'Name': key
-                    }
-                },
-                FeatureTypes=['TABLES']
-            )
-        else:
-            response = self.textract_client.start_document_text_detection(
-                DocumentLocation={
-                    'S3Object': {
-                        'Bucket': bucket_name,
-                        'Name': key
-                    }
+        # Define the features to analyze
+        feature_types = ['TABLES']
+        
+        # Always use StartDocumentAnalysis since it can handle both text and tables
+        print("Starting document analysis job...")
+        response = self.textract_client.start_document_analysis(
+            DocumentLocation={
+                'S3Object': {
+                    'Bucket': bucket_name,
+                    'Name': key
                 }
-            )
+            },
+            FeatureTypes=feature_types
+        )
         
         return response['JobId']
     
@@ -223,47 +209,31 @@ class TextractProcessor:
             job_id: Job ID of the Textract job
             
         Returns:
-            Response from Textract get_document_analysis/get_document_text_detection
+            Response from Textract get_document_analysis
         """
-        # First call to determine which API to use
+        # Get initial job status
+        print(f"Checking status of job {job_id}...")
         response = self.textract_client.get_document_analysis(
             JobId=job_id
         )
         
-        # If this doesn't fail, we're doing document analysis
-        api_type = 'analysis'
-        
-        # If the above call fails, we're doing text detection
-        try:
-            if response['JobStatus'] == 'FAILED':
-                raise Exception(f"Textract job failed with status: {response['JobStatus']}")
-        except Exception:
-            response = self.textract_client.get_document_text_detection(
-                JobId=job_id
-            )
-            api_type = 'text_detection'
-        
         # Wait for job to complete
         status = response['JobStatus']
         while status == 'IN_PROGRESS':
+            print(f"Job status: {status}. Waiting...")
             time.sleep(5)
             
-            if api_type == 'analysis':
-                response = self.textract_client.get_document_analysis(
-                    JobId=job_id
-                )
-            else:
-                response = self.textract_client.get_document_text_detection(
-                    JobId=job_id
-                )
-            
+            response = self.textract_client.get_document_analysis(
+                JobId=job_id
+            )
             status = response['JobStatus']
         
+        print(f"Job completed with status: {status}")
         return response
     
-    def _process_extraction_results(self, job_id: str) -> TextractResult:
+    def _process_analysis_results(self, job_id: str) -> TextractResult:
         """
-        Process the results from a Textract job.
+        Process the results from a Textract document analysis job.
         
         Args:
             job_id: Job ID of the Textract job
@@ -274,35 +244,25 @@ class TextractProcessor:
         # List of all detected blocks
         all_blocks = []
         
-        # Try document analysis first (for tables)
-        try:
+        # Get analysis results
+        print(f"Getting document analysis results for job {job_id}...")
+        response = self.textract_client.get_document_analysis(
+            JobId=job_id
+        )
+        all_blocks.extend(response['Blocks'])
+        
+        # Get all pages
+        next_token = response.get('NextToken')
+        while next_token:
+            print(f"Getting next page of results with token: {next_token[:10]}...")
             response = self.textract_client.get_document_analysis(
-                JobId=job_id
+                JobId=job_id,
+                NextToken=next_token
             )
             all_blocks.extend(response['Blocks'])
-            
-            # Get all pages
-            while 'NextToken' in response:
-                response = self.textract_client.get_document_analysis(
-                    JobId=job_id,
-                    NextToken=response['NextToken']
-                )
-                all_blocks.extend(response['Blocks'])
-                
-        except Exception:
-            # Fall back to text detection
-            response = self.textract_client.get_document_text_detection(
-                JobId=job_id
-            )
-            all_blocks.extend(response['Blocks'])
-            
-            # Get all pages
-            while 'NextToken' in response:
-                response = self.textract_client.get_document_text_detection(
-                    JobId=job_id,
-                    NextToken=response['NextToken']
-                )
-                all_blocks.extend(response['Blocks'])
+            next_token = response.get('NextToken')
+        
+        print(f"Total blocks from document analysis: {len(all_blocks)}")
         
         # Process blocks into structured result
         return self._parse_blocks(all_blocks)
@@ -327,6 +287,20 @@ class TextractProcessor:
         # Process page blocks to get total pages
         page_blocks = [b for b in blocks if b.get('BlockType') == 'PAGE']
         total_pages = len(page_blocks)
+        print(f"Document has {total_pages} pages")
+        
+        # Count different block types for debugging
+        block_types = {}
+        for block in blocks:
+            block_type = block.get('BlockType')
+            if block_type in block_types:
+                block_types[block_type] += 1
+            else:
+                block_types[block_type] = 1
+        
+        print("Block types found:")
+        for block_type, count in block_types.items():
+            print(f"  {block_type}: {count}")
         
         # First pass - collect text blocks and table/cell blocks
         for block in blocks:
@@ -493,6 +467,8 @@ class TextractProcessor:
                     table.cells = cells
         
         # Only keep tables that have cells and dimensions
+        original_tables_count = len(tables)
         tables = [t for t in tables if t.cells and t.row_count > 0 and t.column_count > 0]
+        print(f"Keeping {len(tables)} out of {original_tables_count} tables that have valid cells and dimensions")
         
         return TextractResult(text_blocks=text_blocks, tables=tables) 
