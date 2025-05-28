@@ -3,10 +3,7 @@ import re
 from typing import Optional, List, Dict, Any, Union
 from pathlib import Path
 
-from .bedrock_client import BedrockClient
-from .document_processor import DocumentProcessor
-from .models import AuditQuestion, AuditResponse, AnswerType, BedrockModelConfig
-
+from common.core import BedrockClient, BedrockModelConfig
 
 class AuditQA:
     """
@@ -18,6 +15,7 @@ class AuditQA:
         aws_region: str = "us-gov-west-1",
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
+        aws_session_token: Optional[str] = None,
         model_config: Optional[BedrockModelConfig] = None
     ):
         """
@@ -27,6 +25,7 @@ class AuditQA:
             aws_region: AWS region to use
             aws_access_key_id: AWS access key ID (optional if using IAM roles)
             aws_secret_access_key: AWS secret access key (optional if using IAM roles)
+            aws_session_token: AWS session token (optional, used for temporary credentials)
             model_config: Configuration for the Bedrock model
         """
         # Initialize the Bedrock client
@@ -34,26 +33,23 @@ class AuditQA:
             aws_region=aws_region,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
             model_config=model_config
         )
         
-        # Initialize the document processor
-        self.document_processor = DocumentProcessor()
+        # Document text storage
+        self.document_text = ""
     
-    def load_document(self, bucket_name: str, key: str) -> bool:
+    def set_document_text(self, document_text: str) -> None:
         """
-        Load a document for analysis.
+        Set the document text to use as context.
         
         Args:
-            bucket_name: Name of the S3 bucket
-            key: Key of the PDF file in the S3 bucket
-            
-        Returns:
-            True if successful, False otherwise
+            document_text: The full text of the document
         """
-        return self.document_processor.load_document(bucket_name, key)
+        self.document_text = document_text
     
-    def answer_question(self, question_text: str, context: Optional[str] = None) -> AuditResponse:
+    def answer_question(self, question_text: str, context: Optional[str] = None) -> 'AuditResponse':
         """
         Answer an audit question using the full document as context.
         
@@ -64,11 +60,14 @@ class AuditQA:
         Returns:
             An AuditResponse object with the answer, confidence, and explanation
         """
+        # Import here to avoid circular imports
+        from .models import AuditQuestion, AuditResponse
+        
         # Create question model
         question = AuditQuestion(question=question_text, context=context)
         
         # Get the full document text
-        document_text = self.document_processor.get_document_text()
+        document_text = self.document_text
         
         # Combine provided context with document text
         if question.context:
@@ -80,7 +79,7 @@ class AuditQA:
         answer = self._get_final_answer(question.question, full_context)
         return answer
     
-    def _get_final_answer(self, question: str, context: str) -> AuditResponse:
+    def _get_final_answer(self, question: str, context: str) -> 'AuditResponse':
         """
         Get the final answer from the LLM using the question and context.
         
@@ -91,6 +90,9 @@ class AuditQA:
         Returns:
             An AuditResponse object
         """
+        # Import here to avoid circular imports
+        from .models import AuditResponse, AnswerType
+        
         # Craft prompt for the final answer
         prompt = f"""You are an expert auditor specializing in higher education financial statements. You are tasked with answering questions about financial audits with ONLY "Yes", "No", or "N/A" (if the question is not applicable or cannot be determined from the available information).
 
@@ -140,7 +142,7 @@ Provide your response in the exact JSON format specified above. Your explanation
             # Fallback for parsing errors
             return self._parse_unstructured_response(response_text)
     
-    def _parse_unstructured_response(self, response_text: str) -> AuditResponse:
+    def _parse_unstructured_response(self, response_text: str) -> 'AuditResponse':
         """
         Attempt to parse an unstructured response into an AuditResponse.
         
@@ -150,6 +152,9 @@ Provide your response in the exact JSON format specified above. Your explanation
         Returns:
             An AuditResponse object
         """
+        # Import here to avoid circular imports
+        from .models import AuditResponse, AnswerType
+        
         # Look for Yes/No/N/A in the response
         response_lower = response_text.lower()
         

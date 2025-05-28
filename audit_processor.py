@@ -8,6 +8,7 @@ import argparse
 from typing import Optional, List, Dict
 import pandas as pd
 
+from common.core import DocumentProcessor
 from pdf_memory_audit import AuditQA as MemoryAuditQA
 from rag_audit import AuditQA as RagAuditQA
 from hyde_audit import AuditQA as HydeAuditQA
@@ -23,7 +24,9 @@ class AuditProcessor:
         self, 
         aws_region: str = "us-gov-west-1",
         aws_access_key_id: Optional[str] = None,
-        aws_secret_access_key: Optional[str] = None
+        aws_secret_access_key: Optional[str] = None,
+        aws_session_token: Optional[str] = None,
+        use_rag_query_rewriting: bool = False
     ):
         """
         Initialize the AuditProcessor.
@@ -32,32 +35,50 @@ class AuditProcessor:
             aws_region: AWS region for Bedrock
             aws_access_key_id: AWS access key ID (optional if using IAM roles)
             aws_secret_access_key: AWS secret access key (optional if using IAM roles)
+            aws_session_token: AWS session token (optional, used for temporary credentials)
+            use_rag_query_rewriting: Whether to use query rewriting for the RAG approach
         """
         self.aws_region = aws_region
         self.aws_access_key_id = aws_access_key_id
         self.aws_secret_access_key = aws_secret_access_key
+        self.aws_session_token = aws_session_token
+        self.use_rag_query_rewriting = use_rag_query_rewriting
+        
+        # Initialize the central document processor
+        self.document_processor = DocumentProcessor(
+            aws_region=aws_region,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token
+        )
         
         # Initialize audit clients
         self.memory_qa = MemoryAuditQA(
             aws_region=aws_region,
             aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token
         )
         
         self.rag_qa = RagAuditQA(
             aws_region=aws_region,
             aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            use_query_rewriting=use_rag_query_rewriting
         )
         
         self.hyde_qa = HydeAuditQA(
             aws_region=aws_region,
             aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token
         )
         
         # Document loading status
         self.document_loaded = False
+        self.document_bucket = None
+        self.document_key = None
         
         # Question tree
         self.question_tree = None
@@ -65,26 +86,42 @@ class AuditProcessor:
         # Processed questions cache (for dependency tracking)
         self.processed_questions: Dict[str, Dict[str, any]] = {}
     
-    def load_document(self, bucket_name: str, key: str) -> bool:
+    def load_document(self, bucket_name: str, key: str, force_reprocess: bool = False) -> bool:
         """
-        Load a document into all audit approaches.
+        Load a document using the centralized document processor and make it available to all approaches.
         
         Args:
             bucket_name: S3 bucket name
             key: S3 object key
+            force_reprocess: Whether to force reprocessing even if a processed document exists
             
         Returns:
             True if successful, False otherwise
         """
         print(f"Loading document s3://{bucket_name}/{key}...")
         
-        # Load document for all approaches
-        memory_success = self.memory_qa.load_document(bucket_name, key)
-        rag_success = self.rag_qa.load_document(bucket_name, key)
-        hyde_success = self.hyde_qa.load_document(bucket_name, key)
+        # Process the document once using the centralized document processor
+        success, document_text = self.document_processor.process_document(
+            bucket_name=bucket_name,
+            key=key,
+            force_reprocess=force_reprocess
+        )
         
-        self.document_loaded = memory_success and rag_success and hyde_success
-        return self.document_loaded
+        if not success:
+            print("Failed to process document")
+            return False
+        
+        # Store document details for future reference
+        self.document_bucket = bucket_name
+        self.document_key = key
+        
+        # Set the document text in each of the audit QA instances
+        self.memory_qa.set_document_text(document_text)
+        self.rag_qa.set_document_text(document_text)
+        self.hyde_qa.set_document_text(document_text)
+        
+        self.document_loaded = True
+        return True
     
     def load_questions(self, csv_path: str) -> bool:
         """
@@ -167,12 +204,13 @@ class AuditProcessor:
         else:
             return ""
     
-    def process_with_rag(self, question_id: str) -> bool:
+    def process_with_rag(self, question_id: str, use_query_rewriting: Optional[bool] = None) -> bool:
         """
         Process a question using the RAG approach.
         
         Args:
             question_id: ID of the question to process
+            use_query_rewriting: Whether to use query rewriting (overrides the instance setting if provided)
             
         Returns:
             True if successful, False otherwise
@@ -193,13 +231,22 @@ class AuditProcessor:
         print(f"Processing question {question_id} with RAG approach...")
         print(f"Question: {question.text}")
         
+        # Determine whether to use query rewriting
+        should_rewrite = use_query_rewriting if use_query_rewriting is not None else self.use_rag_query_rewriting
+        if should_rewrite:
+            print("Using query rewriting for vector search optimization")
+        
         # Get dependency context
         dependency_context = self.get_dependency_context(question_id, "rag")
         if dependency_context:
             print("Using context from dependencies")
         
         # Process the question with RAG
-        response = self.rag_qa.answer_question(question.text, context=dependency_context)
+        response = self.rag_qa.answer_question(
+            question.text, 
+            context=dependency_context,
+            use_query_rewriting=should_rewrite
+        )
         
         # Update the question with the response
         if response.answer == "Yes":
@@ -350,13 +397,14 @@ class AuditProcessor:
         
         return True
     
-    def process_question_batch(self, question_ids: List[str], approaches: List[str]) -> bool:
+    def process_question_batch(self, question_ids: List[str], approaches: List[str], use_rag_query_rewriting: Optional[bool] = None) -> bool:
         """
         Process a batch of questions with specified approaches.
         
         Args:
             question_ids: List of question IDs to process
             approaches: List of approaches to use ("rag", "memory", "hyde")
+            use_rag_query_rewriting: Whether to use query rewriting for RAG (overrides the instance setting if provided)
             
         Returns:
             True if all processing was successful, False otherwise
@@ -366,7 +414,7 @@ class AuditProcessor:
         for question_id in question_ids:
             for approach in approaches:
                 if approach.lower() == "rag":
-                    success = self.process_with_rag(question_id)
+                    success = self.process_with_rag(question_id, use_query_rewriting=use_rag_query_rewriting)
                 elif approach.lower() == "memory":
                     success = self.process_with_memory(question_id)
                 elif approach.lower() == "hyde":
@@ -379,12 +427,13 @@ class AuditProcessor:
         
         return all_successful
     
-    def process_all_questions(self, approaches: List[str]) -> bool:
+    def process_all_questions(self, approaches: List[str], use_rag_query_rewriting: Optional[bool] = None) -> bool:
         """
         Process all questions with specified approaches in dependency order.
         
         Args:
             approaches: List of approaches to use ("rag", "memory", "hyde")
+            use_rag_query_rewriting: Whether to use query rewriting for RAG (overrides the instance setting if provided)
             
         Returns:
             True if all processing was successful, False otherwise
@@ -398,7 +447,7 @@ class AuditProcessor:
         question_ids = [q.id for q in ordered_questions]
         
         print(f"Processing {len(question_ids)} questions in dependency order")
-        return self.process_question_batch(question_ids, approaches)
+        return self.process_question_batch(question_ids, approaches, use_rag_query_rewriting=use_rag_query_rewriting)
     
     def save_results(self, output_csv: str) -> bool:
         """
@@ -442,12 +491,17 @@ def main():
                         help="Comma-separated list of question IDs to process (default: all)")
     parser.add_argument("--region", type=str, default="us-gov-west-1",
                         help="AWS region for Bedrock")
+    parser.add_argument("--force-reprocess", action="store_true",
+                        help="Force reprocessing of the document even if a processed version exists")
+    parser.add_argument("--use-rag-query-rewriting", action="store_true",
+                        help="Use query rewriting for the RAG approach to optimize vector search")
     
     args = parser.parse_args()
     
     # Get AWS credentials from environment
     aws_access_key_id = os.environ.get("AWS_ACCESS_KEY_ID")
     aws_secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
+    aws_session_token = os.environ.get("AWS_SESSION_TOKEN")
     
     # Parse approaches
     approaches = [a.strip() for a in args.approaches.split(",")]
@@ -456,11 +510,13 @@ def main():
     processor = AuditProcessor(
         aws_region=args.region,
         aws_access_key_id=aws_access_key_id,
-        aws_secret_access_key=aws_secret_access_key
+        aws_secret_access_key=aws_secret_access_key,
+        aws_session_token=aws_session_token,
+        use_rag_query_rewriting=args.use_rag_query_rewriting
     )
     
     # Load document
-    if not processor.load_document(args.bucket, args.key):
+    if not processor.load_document(args.bucket, args.key, force_reprocess=args.force_reprocess):
         print("Failed to load document")
         return 1
     
@@ -472,9 +528,16 @@ def main():
     # Process questions
     if args.question_ids:
         question_ids = [q.strip() for q in args.question_ids.split(",")]
-        success = processor.process_question_batch(question_ids, approaches)
+        success = processor.process_question_batch(
+            question_ids, 
+            approaches, 
+            use_rag_query_rewriting=args.use_rag_query_rewriting
+        )
     else:
-        success = processor.process_all_questions(approaches)
+        success = processor.process_all_questions(
+            approaches,
+            use_rag_query_rewriting=args.use_rag_query_rewriting
+        )
     
     if not success:
         print("Some questions could not be processed")

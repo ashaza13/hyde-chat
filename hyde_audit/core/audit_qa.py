@@ -3,9 +3,8 @@ import re
 from typing import Optional, List, Dict, Any, Union
 from pathlib import Path
 
-from .bedrock_client import BedrockClient
-from .document_processor import DocumentProcessor
-from .models import AuditQuestion, AuditResponse, AnswerType, BedrockModelConfig
+from common.core import BedrockClient, BedrockModelConfig
+from .models import AuditQuestion, AuditResponse, AnswerType
 
 
 class AuditQA:
@@ -18,6 +17,7 @@ class AuditQA:
         aws_region: str = "us-gov-west-1",
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
+        aws_session_token: Optional[str] = None,
         model_config: Optional[BedrockModelConfig] = None,
         embedding_model_name: str = "all-MiniLM-L6-v2"
     ):
@@ -28,6 +28,7 @@ class AuditQA:
             aws_region: AWS region to use
             aws_access_key_id: AWS access key ID (optional if using IAM roles)
             aws_secret_access_key: AWS secret access key (optional if using IAM roles)
+            aws_session_token: AWS session token (optional, used for temporary credentials)
             model_config: Configuration for the Bedrock model
             embedding_model_name: Name of the embedding model to use
         """
@@ -36,24 +37,21 @@ class AuditQA:
             aws_region=aws_region,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
             model_config=model_config
         )
         
-        # Initialize the document processor
-        self.document_processor = DocumentProcessor(embedding_model_name=embedding_model_name)
+        # Document text storage
+        self.document_text = ""
     
-    def load_document(self, bucket_name: str, key: str) -> bool:
+    def set_document_text(self, document_text: str) -> None:
         """
-        Load a document for analysis.
+        Set the document text to use as context.
         
         Args:
-            bucket_name: Name of the S3 bucket
-            key: Key of the PDF file in the S3 bucket
-            
-        Returns:
-            True if successful, False otherwise
+            document_text: The full text of the document
         """
-        return self.document_processor.load_document(bucket_name, key)
+        self.document_text = document_text
     
     def generate_hypothetical_document(self, question: str) -> str:
         """
@@ -98,18 +96,15 @@ Generate a detailed, realistic extract from a financial statement or audit repor
         # Generate a hypothetical document
         hypothetical_doc = self.generate_hypothetical_document(question.question)
         
-        # Use the hypothetical document to get relevant context from real documents
-        if self.document_processor.documents:
-            # Use the hypothetical document as a query to find relevant real context
-            relevant_context = self.document_processor.get_relevant_context(hypothetical_doc)
-        else:
-            relevant_context = ""
+        # For HyDE, we directly use the document text without semantic search
+        # since this simpler implementation is just for demonstration
+        document_text = self.document_text
         
         # Combine all context
         if question.context:
-            full_context = f"{question.context}\n\n{relevant_context}"
+            full_context = f"{question.context}\n\n{document_text}"
         else:
-            full_context = relevant_context
+            full_context = document_text
         
         # Get the final answer using the LLM
         answer = self._get_final_answer(question.question, full_context)

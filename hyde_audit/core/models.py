@@ -32,15 +32,4 @@ class AuditResponse(BaseModel):
     def explanation_must_be_detailed(cls, v):
         if len(v) < 10:
             raise ValueError('Explanation is too short')
-        return v
-
-
-class BedrockModelConfig(BaseModel):
-    """Configuration for AWS Bedrock models."""
-    model_id: str = Field(..., description="The Bedrock model ID to use")
-    temperature: float = Field(0.0, ge=0.0, le=1.0, description="Temperature for model generation")
-    max_tokens: int = Field(1024, gt=0, description="Maximum tokens to generate")
-    top_p: float = Field(0.9, ge=0.0, le=1.0, description="Top p sampling parameter")
-    
-    class Config:
-        arbitrary_types_allowed = True 
+        return v 
