@@ -39,6 +39,9 @@ def load_questions_from_csv(csv_file) -> Optional[pd.DataFrame]:
     """Load questions from uploaded CSV file."""
     try:
         df = pd.read_csv(csv_file)
+        # Ensure ID column is treated as string
+        if 'id' in df.columns:
+            df['id'] = df['id'].astype(str).str.strip()
         return df
     except Exception as e:
         st.error(f"Error loading CSV: {e}")
@@ -70,6 +73,16 @@ def create_processor(aws_credentials: Dict[str, str], model_config: BedrockModel
 def process_single_question(processor: AuditProcessor, question_id: str, approaches: List[str], use_rag_query_rewriting: bool = False) -> Dict[str, Any]:
     """Process a single question with selected approaches."""
     results = {}
+    
+    # Ensure question_id is a string
+    question_id = str(question_id).strip()
+    
+    # Debug: Check if question exists
+    question = processor.question_tree.get_question(question_id)
+    if not question:
+        available_ids = list(processor.question_tree.questions.keys())
+        st.error(f"Question '{question_id}' not found. Available question IDs: {available_ids}")
+        return {'error': f"Question '{question_id}' not found"}
     
     for approach in approaches:
         try:
@@ -196,7 +209,11 @@ def main():
         if st.session_state.questions_df is None and Path("sample_questions.csv").exists():
             if st.button("Load Sample Questions"):
                 try:
-                    st.session_state.questions_df = pd.read_csv("sample_questions.csv")
+                    questions_df = pd.read_csv("sample_questions.csv")
+                    # Ensure ID column is treated as string
+                    if 'id' in questions_df.columns:
+                        questions_df['id'] = questions_df['id'].astype(str).str.strip()
+                    st.session_state.questions_df = questions_df
                     st.success(f"Loaded {len(st.session_state.questions_df)} sample questions")
                 except Exception as e:
                     st.error(f"Error loading sample questions: {e}")
@@ -253,6 +270,10 @@ def main():
                                 st.session_state.processor = processor
                                 st.session_state.document_loaded = True
                                 st.success("✅ Processor initialized and document loaded successfully!")
+                                
+                                # Debug: Show loaded question IDs
+                                loaded_ids = list(processor.question_tree.questions.keys())
+                                st.info(f"Loaded question IDs: {loaded_ids}")
                             else:
                                 st.error("❌ Failed to load questions")
                         else:
@@ -263,7 +284,7 @@ def main():
                 st.subheader("🎯 Single Question Processing")
                 
                 # Question selection
-                question_options = [(row['id'], f"{row['id']}: {row['question'][:100]}...") for _, row in st.session_state.questions_df.iterrows()]
+                question_options = [(str(row['id']).strip(), f"{str(row['id']).strip()}: {row['question'][:100]}...") for _, row in st.session_state.questions_df.iterrows()]
                 selected_question = st.selectbox(
                     "Select Question",
                     options=[opt[0] for opt in question_options],
@@ -298,15 +319,18 @@ def main():
                         )
                         
                         # Display results
-                        st.subheader("📊 Results")
-                        for approach, result in results.items():
-                            with st.expander(f"{approach.upper()} Results"):
-                                if 'error' in result:
-                                    st.error(f"Error: {result['error']}")
-                                else:
-                                    st.write(f"**Answer:** {result.get('answer', 'N/A')}")
-                                    st.write(f"**Confidence:** {result.get('confidence', 'N/A')}")
-                                    st.write(f"**Explanation:** {result.get('explanation', 'N/A')}")
+                        if 'error' in results:
+                            st.error(f"Error: {results['error']}")
+                        else:
+                            st.subheader("📊 Results")
+                            for approach, result in results.items():
+                                with st.expander(f"{approach.upper()} Results"):
+                                    if 'error' in result:
+                                        st.error(f"Error: {result['error']}")
+                                    else:
+                                        st.write(f"**Answer:** {result.get('answer', 'N/A')}")
+                                        st.write(f"**Confidence:** {result.get('confidence', 'N/A')}")
+                                        st.write(f"**Explanation:** {result.get('explanation', 'N/A')}")
                 
                 # Batch processing
                 st.subheader("📦 Batch Processing")
