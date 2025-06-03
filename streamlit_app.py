@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import tempfile
 import json
+import re
 from typing import List, Optional, Dict, Any
 import asyncio
 import threading
@@ -33,6 +34,8 @@ if 'document_loaded' not in st.session_state:
     st.session_state.document_loaded = False
 if 'processing_status' not in st.session_state:
     st.session_state.processing_status = {}
+if 'document_metadata' not in st.session_state:
+    st.session_state.document_metadata = None
 
 
 def load_questions_from_csv(csv_file) -> Optional[pd.DataFrame]:
@@ -68,6 +71,57 @@ def create_processor(aws_credentials: Dict[str, str], model_config: BedrockModel
     except Exception as e:
         st.error(f"Error creating processor: {e}")
         return None
+
+
+def highlight_page_citations(text: str) -> str:
+    """Highlight page citations in the text for better visibility."""
+    if not text:
+        return text
+    
+    # Pattern to match citations like [1] (Page 5) or [2] (Pages 3-5)
+    citation_pattern = r'(\[(\d+)\]\s*\([Pp]ages?\s*[\d\-,\s]+\))'
+    
+    # Replace citations with highlighted versions
+    def replace_citation(match):
+        full_citation = match.group(1)
+        return f"**:blue[{full_citation}]**"
+    
+    highlighted_text = re.sub(citation_pattern, replace_citation, text)
+    return highlighted_text
+
+
+def display_document_metadata():
+    """Display document metadata information if available."""
+    if st.session_state.processor and st.session_state.document_metadata:
+        with st.expander("📄 Document Information", expanded=False):
+            metadata = st.session_state.document_metadata
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Total Pages", metadata.get('total_pages', 'Unknown'))
+                st.metric("Processing Method", metadata.get('processing_method', 'Unknown'))
+            
+            with col2:
+                if metadata.get('has_metadata'):
+                    st.success("✅ Page Metadata Available")
+                    st.metric("Text Blocks", metadata.get('text_blocks', 'N/A'))
+                else:
+                    st.warning("⚠️ Limited Metadata")
+                    st.info("Document processed with basic extraction")
+            
+            with col3:
+                st.metric("Text Length", f"{metadata.get('text_length', 0):,} chars")
+                if metadata.get('tables'):
+                    st.metric("Tables Found", metadata.get('tables', 0))
+            
+            if metadata.get('page_range'):
+                st.info(f"📖 Page Range: {metadata['page_range']}")
+            
+            if metadata.get('has_metadata'):
+                st.success("🎯 **Enhanced Citations Enabled** - LLM responses will include specific page references!")
+            else:
+                st.info("📝 Standard processing - responses will not include specific page citations")
 
 
 def process_single_question(processor: AuditProcessor, question_id: str, approaches: List[str], use_rag_query_rewriting: bool = False) -> Dict[str, Any]:
@@ -145,7 +199,11 @@ def run_batch_processing(processor: AuditProcessor, approaches: List[str], use_r
 
 def main():
     st.title("📊 Audit Question Processing GUI")
-    st.markdown("Process audit questions using RAG, Memory, and HYDE approaches")
+    st.markdown("Process audit questions using RAG, Memory, and HYDE approaches with **enhanced page citations**")
+    
+    # Display document metadata if available
+    if st.session_state.document_loaded:
+        display_document_metadata()
     
     # Sidebar for configuration
     with st.sidebar:
@@ -260,6 +318,9 @@ def main():
                         # Load document
                         success = processor.load_document(s3_bucket, s3_key, force_reprocess=force_reprocess)
                         if success:
+                            # Store document metadata
+                            st.session_state.document_metadata = processor.document_processor.get_document_summary()
+                            
                             # Create temporary CSV file for questions
                             temp_csv = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
                             st.session_state.questions_df.to_csv(temp_csv.name, index=False)
@@ -271,9 +332,18 @@ def main():
                                 st.session_state.document_loaded = True
                                 st.success("✅ Processor initialized and document loaded successfully!")
                                 
+                                # Show metadata status
+                                if processor.document_processor.has_page_metadata():
+                                    st.success("🎯 **Page metadata detected!** LLM responses will include specific page citations.")
+                                else:
+                                    st.info("📝 Document processed with basic extraction. Page citations will not be available.")
+                                
                                 # Debug: Show loaded question IDs
                                 loaded_ids = list(processor.question_tree.questions.keys())
                                 st.info(f"Loaded question IDs: {loaded_ids}")
+                                
+                                # Force a rerun to show the document metadata
+                                st.rerun()
                             else:
                                 st.error("❌ Failed to load questions")
                         else:
@@ -323,14 +393,49 @@ def main():
                             st.error(f"Error: {results['error']}")
                         else:
                             st.subheader("📊 Results")
+                            
+                            # Check if any results have page citations
+                            has_citations = any(
+                                result.get('explanation', '') and 
+                                (re.search(r'\[\d+\]\s*\([Pp]ages?\s*[\d\-,\s]+\)', result.get('explanation', '')) or
+                                 'page' in result.get('explanation', '').lower())
+                                for result in results.values() if isinstance(result, dict) and 'explanation' in result
+                            )
+                            
+                            if has_citations:
+                                st.success("🎯 **Page citations detected in responses!** Look for highlighted page references below.")
+                            
                             for approach, result in results.items():
-                                with st.expander(f"{approach.upper()} Results"):
+                                with st.expander(f"{approach.upper()} Results", expanded=True):
                                     if 'error' in result:
                                         st.error(f"Error: {result['error']}")
                                     else:
-                                        st.write(f"**Answer:** {result.get('answer', 'N/A')}")
-                                        st.write(f"**Confidence:** {result.get('confidence', 'N/A')}")
-                                        st.write(f"**Explanation:** {result.get('explanation', 'N/A')}")
+                                        # Display answer with color coding
+                                        answer = result.get('answer', 'N/A')
+                                        if answer == 'Yes':
+                                            st.success(f"**Answer:** ✅ {answer}")
+                                        elif answer == 'No':
+                                            st.error(f"**Answer:** ❌ {answer}")
+                                        else:
+                                            st.info(f"**Answer:** ℹ️ {answer}")
+                                        
+                                        # Display confidence
+                                        confidence = result.get('confidence', 'N/A')
+                                        if isinstance(confidence, (int, float)):
+                                            st.metric("Confidence", f"{confidence:.2f}")
+                                        else:
+                                            st.write(f"**Confidence:** {confidence}")
+                                        
+                                        # Display explanation with highlighted citations
+                                        explanation = result.get('explanation', 'N/A')
+                                        if explanation and explanation != 'N/A':
+                                            st.write("**Explanation:**")
+                                            highlighted_explanation = highlight_page_citations(explanation)
+                                            st.markdown(highlighted_explanation)
+                                            
+                                            # Check for page citations and show info
+                                            if re.search(r'\[\d+\]\s*\([Pp]ages?\s*[\d\-,\s]+\)', explanation):
+                                                st.info("📖 **Page citations found!** Blue highlighted text shows specific page references from the document.")
                 
                 # Batch processing
                 st.subheader("📦 Batch Processing")
@@ -379,6 +484,13 @@ def main():
                         st.rerun()
                     elif status == 'completed':
                         st.success("✅ Batch processing completed successfully!")
+                        
+                        # Show enhanced results info
+                        if st.session_state.document_metadata and st.session_state.document_metadata.get('has_metadata'):
+                            st.success("🎯 **Results include page citations!** Download the CSV to see specific page references in the explanation columns.")
+                        else:
+                            st.info("📝 Results saved with standard explanations (no page citations available).")
+                        
                         st.info("📁 Results have been saved and stored in S3 as configured.")
                         
                         # Offer to download results

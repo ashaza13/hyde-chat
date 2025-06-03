@@ -115,10 +115,40 @@ class AuditProcessor:
         self.document_bucket = bucket_name
         self.document_key = key
         
-        # Set the document text in each of the audit QA instances
-        self.memory_qa.set_document_text(document_text)
-        self.rag_qa.set_document_text(document_text)
-        self.hyde_qa.set_document_text(document_text)
+        # Check if we have metadata available
+        if self.document_processor.has_page_metadata():
+            print("Document processed with page metadata - enabling enhanced citation support")
+            
+            # Get chunks with metadata
+            chunks_with_metadata = self.document_processor.get_chunked_text_with_metadata(
+                chunk_size=1000, 
+                overlap=200
+            )
+            
+            print(f"Created {len(chunks_with_metadata)} chunks with page metadata")
+            
+            # Set chunks with metadata for all QA approaches
+            self.memory_qa.set_document_chunks_with_metadata(chunks_with_metadata)
+            self.rag_qa.set_document_chunks_with_metadata(chunks_with_metadata)
+            self.hyde_qa.set_document_chunks_with_metadata(chunks_with_metadata)
+            
+            # Also set the document text for backward compatibility
+            self.memory_qa.set_document_text(document_text)
+            self.rag_qa.set_document_text(document_text)
+            self.hyde_qa.set_document_text(document_text)
+            
+            # Print document summary
+            summary = self.document_processor.get_document_summary()
+            print(f"Document Summary:")
+            for key, value in summary.items():
+                print(f"  {key}: {value}")
+        else:
+            print("Document processed without detailed metadata - using standard approach")
+            
+            # Set the document text in each of the audit QA instances (original approach)
+            self.memory_qa.set_document_text(document_text)
+            self.rag_qa.set_document_text(document_text)
+            self.hyde_qa.set_document_text(document_text)
         
         self.document_loaded = True
         return True

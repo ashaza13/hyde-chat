@@ -1,10 +1,10 @@
 import io
 import json
 import os
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 import boto3
 from PyPDF2 import PdfReader
-from textract_processor import TextractProcessor, TextractResult
+from textract_processor import TextractProcessor, TextractResult, TextChunk
 
 
 class DocumentProcessor:
@@ -51,6 +51,7 @@ class DocumentProcessor:
         
         self.document_text = ""
         self.textract_result = None
+        self.chunks_with_metadata = []
 
     def download_pdf(self, bucket_name: str, key: str) -> io.BytesIO:
         """
@@ -228,6 +229,118 @@ class DocumentProcessor:
             The full text of the loaded document
         """
         return self.document_text
+    
+    def get_chunked_text_with_metadata(self, chunk_size: int = 1000, overlap: int = 200) -> List[TextChunk]:
+        """
+        Get document text chunked with page number metadata preserved.
+        
+        Args:
+            chunk_size: Maximum size of each chunk
+            overlap: Overlap between chunks
+            
+        Returns:
+            List of TextChunk objects with page metadata
+        """
+        if self.textract_result:
+            # Use Textract result for detailed metadata
+            return self.textract_result.get_chunked_text_with_metadata(chunk_size, overlap)
+        else:
+            # Fallback: create basic chunks without detailed metadata
+            return self._create_fallback_chunks(self.document_text, chunk_size, overlap)
+    
+    def get_text_with_metadata(self) -> List[Dict[str, Any]]:
+        """
+        Get text content with page number metadata preserved.
+        
+        Returns:
+            List of dictionaries with 'text', 'page', 'type', and 'block_id' keys
+        """
+        if self.textract_result:
+            return self.textract_result.get_text_with_metadata()
+        else:
+            # Fallback: return text without detailed metadata
+            return [{'text': self.document_text, 'page': 1, 'type': 'text', 'block_id': 'fallback'}]
+    
+    def has_page_metadata(self) -> bool:
+        """
+        Check if the document has detailed page metadata available.
+        
+        Returns:
+            True if page metadata is available, False otherwise
+        """
+        return self.textract_result is not None
+    
+    def get_document_summary(self) -> Dict[str, Any]:
+        """
+        Get a summary of the processed document.
+        
+        Returns:
+            Dictionary with document statistics
+        """
+        if not self.textract_result:
+            return {
+                "total_pages": "Unknown",
+                "has_metadata": False,
+                "text_length": len(self.document_text),
+                "processing_method": "PyPDF2 fallback"
+            }
+        
+        # Get page information from textract result
+        all_pages = set()
+        for block in self.textract_result.text_blocks:
+            all_pages.add(block.page)
+        for table in self.textract_result.tables:
+            all_pages.add(table.page)
+        
+        return {
+            "total_pages": len(all_pages),
+            "page_range": f"{min(all_pages)}-{max(all_pages)}" if all_pages else "N/A",
+            "has_metadata": True,
+            "text_blocks": len(self.textract_result.text_blocks),
+            "tables": len(self.textract_result.tables),
+            "text_length": len(self.document_text),
+            "processing_method": "AWS Textract"
+        }
+    
+    def _create_fallback_chunks(self, text: str, chunk_size: int, overlap: int) -> List[TextChunk]:
+        """
+        Create chunks with basic metadata when Textract is not available.
+        
+        Args:
+            text: The text to chunk
+            chunk_size: Maximum size of each chunk
+            overlap: Overlap between chunks
+            
+        Returns:
+            List of TextChunk objects with basic metadata
+        """
+        chunks = []
+        chunk_index = 0
+        start = 0
+        
+        while start < len(text):
+            end = min(start + chunk_size, len(text))
+            
+            # Try to find a good breaking point
+            if end < len(text):
+                sentence_break = text.rfind('. ', start, end)
+                if sentence_break != -1 and sentence_break > start + chunk_size // 2:
+                    end = sentence_break + 1
+            
+            chunk_text = text[start:end]
+            chunks.append(TextChunk(
+                text=chunk_text,
+                page_numbers=[1],  # Fallback: assume single page
+                start_page=1,
+                end_page=1,
+                chunk_index=chunk_index,
+                source_blocks=[]
+            ))
+            
+            chunk_index += 1
+            start = end - overlap if end < len(text) else end
+        
+        return chunks
         
     def _textract_result_to_dict(self, result: TextractResult) -> Dict[str, Any]:
         """
