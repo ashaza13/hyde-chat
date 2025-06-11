@@ -4,6 +4,8 @@ import os
 import tempfile
 import json
 import re
+import boto3
+import configparser
 from typing import List, Optional, Dict, Any
 import asyncio
 import threading
@@ -182,12 +184,16 @@ def run_batch_processing(processor: AuditProcessor, approaches: List[str], use_r
         success = processor.process_all_questions(approaches, use_rag_query_rewriting=use_rag_query_rewriting)
         
         if success:
+            # Calculate accuracy scores
+            accuracy_scores = calculate_accuracy_scores(processor.question_tree)
+            
             # Save results to a temporary file and then to S3 (if configured)
             temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
             processor.save_results(temp_file.name)
             
             st.session_state.processing_status['status'] = 'completed'
             st.session_state.processing_status['results_file'] = temp_file.name
+            st.session_state.processing_status['accuracy_scores'] = accuracy_scores
         else:
             st.session_state.processing_status['status'] = 'error'
             st.session_state.processing_status['error'] = 'Some questions could not be processed'
@@ -195,6 +201,85 @@ def run_batch_processing(processor: AuditProcessor, approaches: List[str], use_r
     except Exception as e:
         st.session_state.processing_status['status'] = 'error'
         st.session_state.processing_status['error'] = str(e)
+
+
+def get_aws_profiles() -> List[str]:
+    """Get available AWS profiles from ~/.aws/config and ~/.aws/credentials."""
+    profiles = set()
+    
+    # Check ~/.aws/credentials
+    credentials_path = Path.home() / '.aws' / 'credentials'
+    if credentials_path.exists():
+        try:
+            credentials = configparser.ConfigParser()
+            credentials.read(credentials_path)
+            for section in credentials.sections():
+                profiles.add(section)
+        except Exception as e:
+            st.warning(f"Error reading AWS credentials: {e}")
+    
+    return sorted(list(profiles)) if profiles else ['default']
+
+
+def get_aws_credentials_from_profile(profile_name: str) -> Dict[str, str]:
+    """Get AWS credentials for a specific profile."""
+    try:
+        session = boto3.Session(profile_name=profile_name)
+        credentials = session.get_credentials()
+        
+        if credentials:
+            return {
+                'access_key_id': credentials.access_key,
+                'secret_access_key': credentials.secret_key,
+                'session_token': credentials.token,
+                'region': session.region_name or 'us-gov-west-1'
+            }
+        else:
+            st.error(f"Could not get credentials for profile: {profile_name}")
+            return {}
+    except Exception as e:
+        st.error(f"Error getting credentials for profile {profile_name}: {e}")
+        return {}
+
+
+def calculate_accuracy_scores(question_tree: QuestionTree) -> Dict[str, float]:
+    """Calculate accuracy scores for each approach by comparing with truth values."""
+    approaches = ['rag', 'context', 'hyde']  # 'context' is the memory approach
+    scores = {}
+    
+    for approach in approaches:
+        correct = 0
+        total = 0
+        
+        for question in question_tree.get_all_questions():
+            # Skip questions without truth values
+            if question.truth == AnswerType.UNKNOWN:
+                continue
+            
+            # Get the answer for this approach
+            if approach == 'rag':
+                answer = question.rag_answer
+            elif approach == 'context':
+                answer = question.context_answer
+            elif approach == 'hyde':
+                answer = question.hyde_answer
+            else:
+                continue
+            
+            # Skip questions that weren't processed with this approach
+            if answer is None:
+                continue
+            
+            total += 1
+            if answer == question.truth:
+                correct += 1
+        
+        if total > 0:
+            scores[approach] = correct / total
+        else:
+            scores[approach] = 0.0
+    
+    return scores
 
 
 def main():
@@ -211,10 +296,7 @@ def main():
         
         # AWS Credentials Section
         st.subheader("🔐 AWS Credentials")
-        aws_access_key_id = st.text_input("AWS Access Key ID", type="password", help="Your AWS access key ID")
-        aws_secret_access_key = st.text_input("AWS Secret Access Key", type="password", help="Your AWS secret access key")
-        aws_session_token = st.text_input("AWS Session Token (Optional)", type="password", help="AWS session token for temporary credentials")
-        aws_region = st.selectbox("AWS Region", ["us-gov-west-1", "us-east-1", "us-west-2", "eu-west-1"], index=0)
+        profile_name = st.selectbox("AWS Profile", get_aws_profiles())
         
         # Model Configuration Section
         st.subheader("🤖 Model Configuration")
@@ -280,12 +362,12 @@ def main():
         st.header("🚀 Processing")
         
         # Check if we have all required inputs
-        has_credentials = aws_access_key_id and aws_secret_access_key
+        has_credentials = profile_name is not None
         has_document = s3_bucket and s3_key
         has_questions = st.session_state.questions_df is not None
         
         if not has_credentials:
-            st.warning("⚠️ Please provide AWS credentials in the sidebar")
+            st.warning("⚠️ Please select an AWS profile")
         if not has_document:
             st.warning("⚠️ Please provide S3 bucket and key for the document")
         if not has_questions:
@@ -295,6 +377,13 @@ def main():
             # Create processor button
             if st.button("🔧 Initialize Processor", type="primary"):
                 with st.spinner("Initializing processor and loading document..."):
+                    # Get credentials from profile
+                    aws_credentials = get_aws_credentials_from_profile(profile_name)
+                    
+                    if not aws_credentials:
+                        st.error("❌ Failed to get AWS credentials from profile")
+                        st.stop()
+                    
                     # Create model config
                     model_config = BedrockModelConfig(
                         model_id=model_id,
@@ -302,14 +391,6 @@ def main():
                         max_tokens=max_tokens,
                         top_p=top_p
                     )
-                    
-                    # Create AWS credentials dict
-                    aws_credentials = {
-                        'access_key_id': aws_access_key_id,
-                        'secret_access_key': aws_secret_access_key,
-                        'session_token': aws_session_token if aws_session_token else None,
-                        'region': aws_region
-                    }
                     
                     # Create processor
                     processor = create_processor(aws_credentials, model_config, use_rag_query_rewriting)
@@ -484,6 +565,32 @@ def main():
                         st.rerun()
                     elif status == 'completed':
                         st.success("✅ Batch processing completed successfully!")
+                        
+                        # Display accuracy scores if available
+                        if 'accuracy_scores' in st.session_state.processing_status:
+                            st.subheader("🎯 Accuracy Scores")
+                            accuracy_scores = st.session_state.processing_status['accuracy_scores']
+                            
+                            # Create columns for accuracy display
+                            cols = st.columns(len(accuracy_scores))
+                            approach_names = {'rag': 'RAG', 'context': 'Memory', 'hyde': 'HYDE'}
+                            
+                            for i, (approach, score) in enumerate(accuracy_scores.items()):
+                                with cols[i]:
+                                    display_name = approach_names.get(approach, approach.upper())
+                                    # Color code the accuracy score
+                                    if score >= 0.8:
+                                        st.metric(display_name, f"{score:.1%}", delta="Excellent", delta_color="normal")
+                                    elif score >= 0.6:
+                                        st.metric(display_name, f"{score:.1%}", delta="Good", delta_color="normal")
+                                    elif score >= 0.4:
+                                        st.metric(display_name, f"{score:.1%}", delta="Fair", delta_color="off")
+                                    else:
+                                        st.metric(display_name, f"{score:.1%}", delta="Poor", delta_color="inverse")
+                            
+                            # Summary
+                            best_approach = max(accuracy_scores.items(), key=lambda x: x[1])
+                            st.info(f"🏆 **Best performing approach**: {approach_names.get(best_approach[0], best_approach[0].upper())} with {best_approach[1]:.1%} accuracy")
                         
                         # Show enhanced results info
                         if st.session_state.document_metadata and st.session_state.document_metadata.get('has_metadata'):

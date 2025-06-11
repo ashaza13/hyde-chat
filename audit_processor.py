@@ -127,15 +127,12 @@ class AuditProcessor:
             
             print(f"Created {len(chunks_with_metadata)} chunks with page metadata")
             
-            # Set chunks with metadata for all QA approaches
-            self.memory_qa.set_document_chunks_with_metadata(chunks_with_metadata)
+            # Set chunks with metadata for RAG and HYDE approaches (only they support vectordb metadata)
             self.rag_qa.set_document_chunks_with_metadata(chunks_with_metadata)
             self.hyde_qa.set_document_chunks_with_metadata(chunks_with_metadata)
             
-            # Also set the document text for backward compatibility
+            # Set document text for memory approach (no metadata support)
             self.memory_qa.set_document_text(document_text)
-            self.rag_qa.set_document_text(document_text)
-            self.hyde_qa.set_document_text(document_text)
             
             # Print document summary
             summary = self.document_processor.get_document_summary()
@@ -521,17 +518,40 @@ def main():
                         help="Comma-separated list of question IDs to process (default: all)")
     parser.add_argument("--region", type=str, default="us-gov-west-1",
                         help="AWS region for Bedrock")
+    parser.add_argument("--profile", type=str, default=None,
+                        help="AWS profile to use (overrides environment variables)")
     parser.add_argument("--force-reprocess", action="store_true",
                         help="Force reprocessing of the document even if a processed version exists")
     parser.add_argument("--use-rag-query-rewriting", action="store_true",
                         help="Use query rewriting for the RAG approach to optimize vector search")
+    parser.add_argument("--show-accuracy", action="store_true",
+                        help="Calculate and display accuracy scores (requires 'truth' column in CSV)")
     
     args = parser.parse_args()
     
-    # Get AWS credentials from environment
-    aws_access_key_id = os.environ.get("AWS_ACCESS_KEY_ID")
-    aws_secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
-    aws_session_token = os.environ.get("AWS_SESSION_TOKEN")
+    # Get AWS credentials - prioritize profile if specified
+    if args.profile:
+        try:
+            import boto3
+            session = boto3.Session(profile_name=args.profile)
+            credentials = session.get_credentials()
+            if credentials:
+                aws_access_key_id = credentials.access_key
+                aws_secret_access_key = credentials.secret_key
+                aws_session_token = credentials.token
+                if not args.region:
+                    args.region = session.region_name or args.region
+            else:
+                print(f"Error: Could not get credentials for profile: {args.profile}")
+                return 1
+        except Exception as e:
+            print(f"Error using AWS profile {args.profile}: {e}")
+            return 1
+    else:
+        # Get AWS credentials from environment
+        aws_access_key_id = os.environ.get("AWS_ACCESS_KEY_ID")
+        aws_secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
+        aws_session_token = os.environ.get("AWS_SESSION_TOKEN")
     
     # Parse approaches
     approaches = [a.strip() for a in args.approaches.split(",")]
@@ -576,6 +596,57 @@ def main():
     if not processor.save_results(args.output):
         print("Failed to save results")
         return 1
+    
+    # Calculate and display accuracy scores if requested
+    if args.show_accuracy:
+        print("\n" + "="*50)
+        print("ACCURACY SCORES")
+        print("="*50)
+        
+        approach_names = {'rag': 'RAG', 'memory': 'Memory', 'hyde': 'HYDE'}
+        accuracy_scores = {}
+        
+        for approach in approaches:
+            correct = 0
+            total = 0
+            
+            for question in processor.question_tree.get_all_questions():
+                # Skip questions without truth values
+                if question.truth.value == "Unknown":
+                    continue
+                
+                # Get the answer for this approach
+                if approach == 'rag':
+                    answer = question.rag_answer
+                elif approach == 'memory':
+                    answer = question.context_answer
+                elif approach == 'hyde':
+                    answer = question.hyde_answer
+                else:
+                    continue
+                
+                # Skip questions that weren't processed with this approach
+                if answer is None:
+                    continue
+                
+                total += 1
+                if answer == question.truth:
+                    correct += 1
+            
+            if total > 0:
+                accuracy = correct / total
+                accuracy_scores[approach] = accuracy
+                display_name = approach_names.get(approach, approach.upper())
+                print(f"{display_name:8s}: {correct:3d}/{total:3d} = {accuracy:6.1%}")
+            else:
+                print(f"{approach_names.get(approach, approach.upper()):8s}: No questions with truth values processed")
+        
+        if accuracy_scores:
+            best_approach = max(accuracy_scores.items(), key=lambda x: x[1])
+            print("\n" + "-"*50)
+            print(f"Best performing approach: {approach_names.get(best_approach[0], best_approach[0].upper())} ({best_approach[1]:.1%})")
+        
+        print("="*50)
     
     return 0
 
