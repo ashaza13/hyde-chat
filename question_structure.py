@@ -166,14 +166,16 @@ class QuestionTree:
             
             # Convert truth value to AnswerType if it exists
             truth = None
-            if 'truth' in row and pd.notna(row['truth']):
-                truth_str = str(row['truth']).strip().upper()
-                if truth_str == "YES":
+            if 'truth' in row and pd.notna(row['truth']) and str(row['truth']).strip() != '':
+                truth_str = str(row['truth']).strip()
+                if truth_str.upper() == "YES":
                     truth = AnswerType.YES
-                elif truth_str == "NO":
+                elif truth_str.upper() == "NO":
                     truth = AnswerType.NO
-                elif truth_str == "N/A":
+                elif truth_str == "N/A" or truth_str.upper() == "N/A":
                     truth = AnswerType.NA
+                elif truth_str.upper() == "UNKNOWN":
+                    truth = AnswerType.UNKNOWN
             
             question = Question(
                 id=question_id,
@@ -193,13 +195,24 @@ class QuestionTree:
         """
         rows = []
         for question in self.questions.values():
+            # Handle truth value output properly - include all valid truth values
+            truth_value = ''
+            if question.truth and question.truth != AnswerType.UNKNOWN:
+                truth_value = question.truth.value
+            
             row = {
                 'id': question.id,
                 'question': question.text,
-                'truth': question.truth.value if question.truth != AnswerType.UNKNOWN else '',
+                'truth': truth_value,
                 'rag': question.rag_answer.value if question.rag_answer else '',
+                'rag_confidence': question.rag_confidence if question.rag_confidence is not None else '',
+                'rag_explanation': question.rag_explanation if question.rag_explanation else '',
                 'context': question.context_answer.value if question.context_answer else '',
+                'context_confidence': question.context_confidence if question.context_confidence is not None else '',
+                'context_explanation': question.context_explanation if question.context_explanation else '',
                 'hyde': question.hyde_answer.value if question.hyde_answer else '',
+                'hyde_confidence': question.hyde_confidence if question.hyde_confidence is not None else '',
+                'hyde_explanation': question.hyde_explanation if question.hyde_explanation else '',
                 'tree_traverse': question.tree_traverse_answer.value if question.tree_traverse_answer else ''
             }
             rows.append(row)
@@ -207,9 +220,18 @@ class QuestionTree:
         # Sort rows by ID for better readability
         rows.sort(key=lambda x: x['id'])
         
+        # Define all possible fieldnames
+        fieldnames = [
+            'id', 'question', 'truth', 
+            'rag', 'rag_confidence', 'rag_explanation',
+            'context', 'context_confidence', 'context_explanation', 
+            'hyde', 'hyde_confidence', 'hyde_explanation',
+            'tree_traverse'
+        ]
+        
         # Write to CSV
         with open(csv_path, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=['id', 'question', 'truth', 'rag', 'context', 'hyde', 'tree_traverse'])
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
     
