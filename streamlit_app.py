@@ -252,6 +252,7 @@ def upload_file_to_s3(file_content, filename: str, bucket_name: str, aws_credent
     """Upload a file to S3 with the financial-statement prefix."""
     try:
         import boto3
+        from botocore.exceptions import ClientError
         
         # Create S3 client
         s3_client = boto3.client(
@@ -270,9 +271,15 @@ def upload_file_to_s3(file_content, filename: str, bucket_name: str, aws_credent
             s3_client.head_object(Bucket=bucket_name, Key=s3_key)
             st.warning(f"File '{filename}' already exists in bucket. Skipping upload.")
             return False
-        except s3_client.exceptions.NoSuchKey:
-            # File doesn't exist, proceed with upload
-            pass
+        except ClientError as e:
+            # Check if the error is "Not Found" (404), which means file doesn't exist
+            if e.response['Error']['Code'] == '404' or e.response['Error']['Code'] == 'NoSuchKey':
+                # File doesn't exist, proceed with upload
+                pass
+            else:
+                # Some other error occurred
+                st.error(f"❌ Error checking if file exists: {e}")
+                return False
         
         # Upload the file
         s3_client.put_object(
@@ -294,6 +301,7 @@ def list_financial_statements(bucket_name: str, aws_credentials: Dict[str, str])
     """List all files in the financial-statement prefix of the specified bucket."""
     try:
         import boto3
+        from botocore.exceptions import ClientError
         
         # Create S3 client
         s3_client = boto3.client(
@@ -305,10 +313,18 @@ def list_financial_statements(bucket_name: str, aws_credentials: Dict[str, str])
         )
         
         # List objects with financial-statement prefix
-        response = s3_client.list_objects_v2(
-            Bucket=bucket_name,
-            Prefix='financial-statement/'
-        )
+        try:
+            response = s3_client.list_objects_v2(
+                Bucket=bucket_name,
+                Prefix='financial-statement/'
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchBucket':
+                st.error(f"❌ Bucket '{bucket_name}' does not exist or you don't have access to it")
+                return []
+            else:
+                st.error(f"❌ Error accessing bucket: {e}")
+                return []
         
         documents = []
         if 'Contents' in response:
