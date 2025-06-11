@@ -8,7 +8,6 @@ import boto3
 import configparser
 from typing import List, Optional, Dict, Any
 import asyncio
-import threading
 import time
 from pathlib import Path
 
@@ -189,36 +188,34 @@ def process_single_question(processor: AuditProcessor, question_id: str, approac
     return results
 
 
-def run_batch_processing(processor: AuditProcessor, approaches: List[str], use_rag_query_rewriting: bool = False):
-    """Run batch processing in a separate thread with detailed progress tracking."""
+def run_batch_processing_sync(processor: AuditProcessor, approaches: List[str], use_rag_query_rewriting: bool = False):
+    """Run batch processing synchronously with real-time progress updates."""
+    
+    # Get questions in dependency order
+    ordered_questions = processor.question_tree.get_questions_in_order()
+    total_questions = len(ordered_questions)
+    total_operations = total_questions * len(approaches)
+    
+    # Create progress containers
+    progress_bar = st.progress(0)
+    status_container = st.empty()
+    current_question_container = st.empty()
+    completed_container = st.empty()
+    
+    completed_questions = []
+    completed_operations = 0
+    
     try:
-        # Initialize processing status
-        ordered_questions = processor.question_tree.get_questions_in_order()
-        total_questions = len(ordered_questions)
-        total_operations = total_questions * len(approaches)
-        
-        st.session_state['processing_status'].update({
-            'status': 'running',
-            'total_questions': total_questions,
-            'completed_questions': [],
-            'current_question': None,
-            'current_approach': None,
-            'progress': 0
-        })
-        
-        completed_operations = 0
-        
         # Process questions in dependency order
-        for question in ordered_questions:
-            st.session_state['processing_status']['current_question'] = {
-                'id': question.id,
-                'text': question.text[:100] + "..." if len(question.text) > 100 else question.text
-            }
-            
+        for q_idx, question in enumerate(ordered_questions):
             question_success = True
             
+            # Update current question display
+            current_question_container.info(f"🔄 **Processing Question {question.id}** ({q_idx + 1}/{total_questions})\n\n*{question.text[:150]}{'...' if len(question.text) > 150 else ''}*")
+            
             for approach in approaches:
-                st.session_state['processing_status']['current_approach'] = approach.upper()
+                # Update status
+                status_container.write(f"**Current approach:** {approach.upper()}")
                 
                 try:
                     if approach.lower() == "rag":
@@ -234,18 +231,32 @@ def run_batch_processing(processor: AuditProcessor, approaches: List[str], use_r
                         question_success = False
                         
                 except Exception as e:
-                    print(f"Error processing question {question.id} with {approach}: {e}")
+                    st.error(f"Error processing question {question.id} with {approach}: {e}")
                     question_success = False
                 
                 completed_operations += 1
-                st.session_state['processing_status']['progress'] = (completed_operations / total_operations) * 100
+                progress_percentage = (completed_operations / total_operations)
+                progress_bar.progress(progress_percentage, text=f"Overall Progress: {progress_percentage:.1%}")
             
             # Mark question as completed
-            st.session_state['processing_status']['completed_questions'].append({
+            completed_questions.append({
                 'id': question.id,
                 'text': question.text[:50] + "..." if len(question.text) > 50 else question.text,
                 'success': question_success
             })
+            
+            # Update completed questions display
+            with completed_container.container():
+                st.write(f"**Completed Questions:** {len(completed_questions)}/{total_questions}")
+                if len(completed_questions) > 0:
+                    # Show last few completed questions
+                    for q in completed_questions[-3:]:  # Show last 3
+                        status_icon = "✅" if q['success'] else "❌"
+                        st.write(f"{status_icon} **{q['id']}:** {q['text']}")
+        
+        # Clear progress displays
+        current_question_container.empty()
+        status_container.empty()
         
         # Calculate accuracy scores
         accuracy_scores = calculate_accuracy_scores(processor.question_tree)
@@ -254,23 +265,29 @@ def run_batch_processing(processor: AuditProcessor, approaches: List[str], use_r
         temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
         processor.save_results(temp_file.name)
         
-        # Update final status
-        st.session_state['processing_status'].update({
+        # Show completion status
+        progress_bar.progress(1.0, text="✅ Processing Complete!")
+        
+        return {
             'status': 'completed',
             'results_file': temp_file.name,
             'accuracy_scores': accuracy_scores,
-            'current_question': None,
-            'current_approach': None,
-            'progress': 100
-        })
+            'completed_questions': completed_questions
+        }
             
     except Exception as e:
-        st.session_state['processing_status'].update({
+        # Clear progress displays
+        current_question_container.empty()
+        status_container.empty()
+        progress_bar.empty()
+        
+        st.error(f"❌ Error during batch processing: {e}")
+        
+        return {
             'status': 'error',
             'error': str(e),
-            'current_question': None,
-            'current_approach': None
-        })
+            'completed_questions': completed_questions
+        }
 
 
 def get_aws_profiles() -> List[str]:
@@ -801,24 +818,24 @@ def main():
                 
                 if batch_approaches:
                     if st.button("🚀 Start Batch Processing", type="primary"):
-                        # Initialize processing status
-                        st.session_state['processing_status'] = {
-                            'status': 'starting',
-                            'current_question': None,
-                            'completed_questions': [],
-                            'total_questions': 0,
-                            'current_approach': None,
-                            'progress': 0,
-                            'error': None
-                        }
+                        st.info("🚀 Starting batch processing...")
                         
-                        # Start processing in a thread
-                        thread = threading.Thread(
-                            target=run_batch_processing,
-                            args=(st.session_state['processor'], batch_approaches, use_rag_query_rewriting)
+                        # Run batch processing synchronously
+                        result = run_batch_processing_sync(
+                            st.session_state['processor'], 
+                            batch_approaches, 
+                            use_rag_query_rewriting
                         )
-                        thread.start()
-                        st.success("🚀 Batch processing started!")
+                        
+                        # Store result in session state for display
+                        st.session_state['processing_status'] = result
+                        
+                        if result['status'] == 'completed':
+                            st.success("✅ Batch processing completed successfully!")
+                        elif result['status'] == 'error':
+                            st.error(f"❌ Batch processing failed: {result.get('error', 'Unknown error')}")
+                        
+                        # Force rerun to show results
                         st.rerun()
                 
                 # Multi-Document Processing Section
@@ -859,52 +876,29 @@ def main():
                                 st.warning("🚧 Multi-document processing will be implemented in a future update!")
                                 st.info("For now, please process documents one at a time using the single document processor above.")
                 
-                # Display processing status
+                # Display processing results
                 if 'status' in st.session_state['processing_status']:
                     status = st.session_state['processing_status']['status']
                     
-                    if status == 'starting':
-                        st.info("🔄 Starting batch processing...")
-                    elif status == 'running':
-                        # Show detailed progress
-                        progress = st.session_state['processing_status'].get('progress', 0)
-                        current_question = st.session_state['processing_status'].get('current_question')
-                        current_approach = st.session_state['processing_status'].get('current_approach')
-                        completed_questions = st.session_state['processing_status'].get('completed_questions', [])
-                        total_questions = st.session_state['processing_status'].get('total_questions', 0)
+                    if status == 'completed':
+                        st.success("✅ Batch processing completed successfully!")
                         
-                        st.info("🔄 Processing questions... This may take several minutes.")
-                        
-                        # Progress bar
-                        st.progress(progress / 100, text=f"Overall Progress: {progress:.1f}%")
-                        
-                        # Current status
-                        if current_question and current_approach:
-                            st.write(f"**Currently processing:** Question {current_question['id']} with {current_approach} approach")
-                            st.write(f"*Question:* {current_question['text']}")
-                        
-                        # Progress summary
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.metric("Questions Completed", f"{len(completed_questions)}/{total_questions}")
-                        with col2:
-                            if current_approach:
-                                st.metric("Current Approach", current_approach)
-                        
-                        # Show recently completed questions
-                        if completed_questions:
-                            with st.expander(f"📋 Completed Questions ({len(completed_questions)})", expanded=False):
-                                for q in completed_questions[-5:]:  # Show last 5 completed
+                        # Show completed questions summary
+                        if 'completed_questions' in st.session_state['processing_status']:
+                            completed_questions = st.session_state['processing_status']['completed_questions']
+                            successful_questions = [q for q in completed_questions if q['success']]
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.metric("Total Questions Processed", len(completed_questions))
+                            with col2:
+                                st.metric("Successfully Processed", len(successful_questions))
+                            
+                            # Show completed questions
+                            with st.expander(f"📋 Processed Questions ({len(completed_questions)})", expanded=False):
+                                for q in completed_questions:
                                     status_icon = "✅" if q['success'] else "❌"
                                     st.write(f"{status_icon} **{q['id']}:** {q['text']}")
-                                if len(completed_questions) > 5:
-                                    st.write(f"... and {len(completed_questions) - 5} more completed questions")
-                        
-                        # Auto-refresh every 3 seconds
-                        time.sleep(3)
-                        st.rerun()
-                    elif status == 'completed':
-                        st.success("✅ Batch processing completed successfully!")
                         
                         # Display accuracy scores if available
                         if 'accuracy_scores' in st.session_state['processing_status']:
