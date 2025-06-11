@@ -38,6 +38,12 @@ if 'processing_status' not in st.session_state:
     st.session_state.processing_status = {}
 if 'document_metadata' not in st.session_state:
     st.session_state.document_metadata = None
+if 'available_documents' not in st.session_state:
+    st.session_state.available_documents = []
+if 'selected_document' not in st.session_state:
+    st.session_state.selected_document = None
+if 'aws_credentials' not in st.session_state:
+    st.session_state.aws_credentials = None
 
 
 def load_questions_from_csv(csv_file) -> Optional[pd.DataFrame]:
@@ -242,6 +248,92 @@ def get_aws_credentials_from_profile(profile_name: str) -> Dict[str, str]:
         return {}
 
 
+def upload_file_to_s3(file_content, filename: str, bucket_name: str, aws_credentials: Dict[str, str]) -> bool:
+    """Upload a file to S3 with the financial-statement prefix."""
+    try:
+        import boto3
+        
+        # Create S3 client
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=aws_credentials['access_key_id'],
+            aws_secret_access_key=aws_credentials['secret_access_key'],
+            aws_session_token=aws_credentials.get('session_token'),
+            region_name=aws_credentials['region']
+        )
+        
+        # Define the S3 key with financial-statement prefix
+        s3_key = f"financial-statement/{filename}"
+        
+        # Check if file already exists
+        try:
+            s3_client.head_object(Bucket=bucket_name, Key=s3_key)
+            st.warning(f"File '{filename}' already exists in bucket. Skipping upload.")
+            return False
+        except s3_client.exceptions.NoSuchKey:
+            # File doesn't exist, proceed with upload
+            pass
+        
+        # Upload the file
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=s3_key,
+            Body=file_content,
+            ContentType='application/pdf'  # Assuming PDF files
+        )
+        
+        st.success(f"✅ Successfully uploaded '{filename}' to s3://{bucket_name}/{s3_key}")
+        return True
+        
+    except Exception as e:
+        st.error(f"❌ Error uploading '{filename}': {e}")
+        return False
+
+
+def list_financial_statements(bucket_name: str, aws_credentials: Dict[str, str]) -> List[Dict[str, str]]:
+    """List all files in the financial-statement prefix of the specified bucket."""
+    try:
+        import boto3
+        
+        # Create S3 client
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=aws_credentials['access_key_id'],
+            aws_secret_access_key=aws_credentials['secret_access_key'],
+            aws_session_token=aws_credentials.get('session_token'),
+            region_name=aws_credentials['region']
+        )
+        
+        # List objects with financial-statement prefix
+        response = s3_client.list_objects_v2(
+            Bucket=bucket_name,
+            Prefix='financial-statement/'
+        )
+        
+        documents = []
+        if 'Contents' in response:
+            for obj in response['Contents']:
+                # Skip the prefix itself if it appears as an object
+                if obj['Key'] == 'financial-statement/':
+                    continue
+                    
+                # Extract filename from key
+                filename = obj['Key'].replace('financial-statement/', '')
+                if filename:  # Make sure it's not empty
+                    documents.append({
+                        'filename': filename,
+                        'key': obj['Key'],
+                        'size': obj['Size'],
+                        'modified': obj['LastModified']
+                    })
+        
+        return documents
+        
+    except Exception as e:
+        st.error(f"❌ Error listing documents: {e}")
+        return []
+
+
 def calculate_accuracy_scores(question_tree: QuestionTree) -> Dict[str, float]:
     """Calculate accuracy scores for each approach by comparing with truth values."""
     approaches = ['rag', 'context', 'hyde']  # 'context' is the memory approach
@@ -298,16 +390,21 @@ def main():
         st.subheader("🔐 AWS Credentials")
         profile_name = st.selectbox("AWS Profile", get_aws_profiles())
         
+        # Reset credentials if profile changes
+        if 'last_profile' not in st.session_state:
+            st.session_state.last_profile = profile_name
+        elif st.session_state.last_profile != profile_name:
+            st.session_state.aws_credentials = None
+            st.session_state.available_documents = []
+            st.session_state.selected_document = None
+            st.session_state.last_profile = profile_name
+        
         # Model Configuration Section
         st.subheader("🤖 Model Configuration")
         model_id = st.selectbox(
             "Model ID",
             [
-                "anthropic.claude-3-sonnet-20240229-v1:0",
-                "anthropic.claude-3-haiku-20240307-v1:0",
-                "anthropic.claude-3-opus-20240229-v1:0",
-                "amazon.titan-text-express-v1",
-                "amazon.titan-text-lite-v1"
+                "anthropic.claude-3-5-sonnet-20240620-v1:0"
             ],
             index=0
         )
@@ -322,9 +419,81 @@ def main():
         
         # Document Configuration
         st.subheader("📄 Document Configuration")
-        s3_bucket = st.text_input("S3 Bucket", help="S3 bucket containing the document")
-        s3_key = st.text_input("S3 Key", help="S3 key for the document")
+        s3_bucket = st.text_input("S3 Bucket", help="S3 bucket to store and process financial statements")
         force_reprocess = st.checkbox("Force Reprocess", value=False, help="Force reprocessing even if processed document exists")
+        
+        # File Upload Section
+        if s3_bucket and st.session_state.aws_credentials:
+            st.subheader("📤 Upload Financial Statements")
+            uploaded_files = st.file_uploader(
+                "Upload PDF files", 
+                type=['pdf'], 
+                accept_multiple_files=True,
+                help="Upload financial statement PDF files to process"
+            )
+            
+            if uploaded_files:
+                if st.button("🚀 Upload to S3"):
+                    upload_success_count = 0
+                    for uploaded_file in uploaded_files:
+                        file_content = uploaded_file.read()
+                        success = upload_file_to_s3(
+                            file_content, 
+                            uploaded_file.name, 
+                            s3_bucket, 
+                            st.session_state.aws_credentials
+                        )
+                        if success:
+                            upload_success_count += 1
+                    
+                    if upload_success_count > 0:
+                        st.success(f"✅ Successfully uploaded {upload_success_count} file(s)")
+                        # Refresh the available documents list
+                        st.session_state.available_documents = list_financial_statements(
+                            s3_bucket, 
+                            st.session_state.aws_credentials
+                        )
+                        st.rerun()
+            
+            # Display available documents
+            st.subheader("📋 Available Financial Statements")
+            if st.button("🔄 Refresh Document List"):
+                st.session_state.available_documents = list_financial_statements(
+                    s3_bucket, 
+                    st.session_state.aws_credentials
+                )
+                st.rerun()
+            
+            if st.session_state.available_documents:
+                st.write(f"Found {len(st.session_state.available_documents)} financial statement(s):")
+                
+                # Create a DataFrame for better display
+                docs_df = pd.DataFrame(st.session_state.available_documents)
+                docs_df['size_mb'] = docs_df['size'] / (1024 * 1024)
+                docs_df['modified'] = pd.to_datetime(docs_df['modified']).dt.strftime('%Y-%m-%d %H:%M')
+                
+                display_df = docs_df[['filename', 'size_mb', 'modified']].copy()
+                display_df.columns = ['Filename', 'Size (MB)', 'Last Modified']
+                display_df['Size (MB)'] = display_df['Size (MB)'].round(2)
+                
+                st.dataframe(display_df, use_container_width=True)
+                
+                # Document selection for processing
+                st.subheader("📄 Select Document to Process")
+                selected_doc_name = st.selectbox(
+                    "Choose a financial statement",
+                    options=[doc['filename'] for doc in st.session_state.available_documents],
+                    format_func=lambda x: f"{x} ({next((doc['size']/1024/1024) for doc in st.session_state.available_documents if doc['filename'] == x):.1f} MB)"
+                )
+                
+                if selected_doc_name:
+                    selected_doc = next(doc for doc in st.session_state.available_documents if doc['filename'] == selected_doc_name)
+                    st.session_state.selected_document = selected_doc
+            else:
+                st.info("No financial statements found. Upload some PDF files to get started!")
+        
+        elif s3_bucket and not st.session_state.aws_credentials:
+            st.warning("⚠️ Please configure AWS credentials first to upload and list documents")
     
     # Main content area
     col1, col2 = st.columns([1, 2])
@@ -361,15 +530,33 @@ def main():
     with col2:
         st.header("🚀 Processing")
         
+        # Get AWS credentials and store them in session state
+        if profile_name and not st.session_state.aws_credentials:
+            with st.spinner("Loading AWS credentials..."):
+                aws_credentials = get_aws_credentials_from_profile(profile_name)
+                if aws_credentials:
+                    st.session_state.aws_credentials = aws_credentials
+                    # Also load available documents
+                    if s3_bucket:
+                        st.session_state.available_documents = list_financial_statements(
+                            s3_bucket, 
+                            st.session_state.aws_credentials
+                        )
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to get AWS credentials from profile")
+        
         # Check if we have all required inputs
-        has_credentials = profile_name is not None
-        has_document = s3_bucket and s3_key
+        has_credentials = st.session_state.aws_credentials is not None
+        has_document = s3_bucket and st.session_state.selected_document is not None
         has_questions = st.session_state.questions_df is not None
         
         if not has_credentials:
             st.warning("⚠️ Please select an AWS profile")
-        if not has_document:
-            st.warning("⚠️ Please provide S3 bucket and key for the document")
+        if not has_document and s3_bucket:
+            st.warning("⚠️ Please select a financial statement to process")
+        elif not s3_bucket:
+            st.warning("⚠️ Please provide an S3 bucket name")
         if not has_questions:
             st.warning("⚠️ Please upload a questions CSV file")
         
@@ -377,13 +564,6 @@ def main():
             # Create processor button
             if st.button("🔧 Initialize Processor", type="primary"):
                 with st.spinner("Initializing processor and loading document..."):
-                    # Get credentials from profile
-                    aws_credentials = get_aws_credentials_from_profile(profile_name)
-                    
-                    if not aws_credentials:
-                        st.error("❌ Failed to get AWS credentials from profile")
-                        st.stop()
-                    
                     # Create model config
                     model_config = BedrockModelConfig(
                         model_id=model_id,
@@ -393,11 +573,12 @@ def main():
                     )
                     
                     # Create processor
-                    processor = create_processor(aws_credentials, model_config, use_rag_query_rewriting)
+                    processor = create_processor(st.session_state.aws_credentials, model_config, use_rag_query_rewriting)
                     
                     if processor:
-                        # Load document
-                        success = processor.load_document(s3_bucket, s3_key, force_reprocess=force_reprocess)
+                        # Load document using selected document
+                        selected_doc = st.session_state.selected_document
+                        success = processor.load_document(s3_bucket, selected_doc['key'], force_reprocess=force_reprocess)
                         if success:
                             # Store document metadata
                             st.session_state.document_metadata = processor.document_processor.get_document_summary()
@@ -411,7 +592,7 @@ def main():
                             if processor.load_questions(temp_csv.name):
                                 st.session_state.processor = processor
                                 st.session_state.document_loaded = True
-                                st.success("✅ Processor initialized and document loaded successfully!")
+                                st.success(f"✅ Processor initialized and document '{selected_doc['filename']}' loaded successfully!")
                                 
                                 # Show metadata status
                                 if processor.document_processor.has_page_metadata():
@@ -520,7 +701,7 @@ def main():
                 
                 # Batch processing
                 st.subheader("📦 Batch Processing")
-                st.write("Process all questions with selected approaches")
+                st.write("Process all questions with selected approaches on the current document")
                 
                 col_batch_rag, col_batch_memory, col_batch_hyde = st.columns(3)
                 with col_batch_rag:
@@ -551,6 +732,44 @@ def main():
                         thread.start()
                         st.success("🚀 Batch processing started!")
                         st.rerun()
+                
+                # Multi-Document Processing Section
+                if len(st.session_state.available_documents) > 1:
+                    st.subheader("📚 Multi-Document Processing")
+                    st.write("Process questions across multiple financial statements")
+                    
+                    # Document selection for multi-processing
+                    selected_docs = st.multiselect(
+                        "Select documents for batch processing",
+                        options=[doc['filename'] for doc in st.session_state.available_documents],
+                        default=None,
+                        help="Select multiple documents to process with the same questions"
+                    )
+                    
+                    if selected_docs and len(selected_docs) > 1:
+                        st.info(f"Selected {len(selected_docs)} documents for multi-document processing")
+                        
+                        # Multi-document approach selection
+                        col_multi_rag, col_multi_memory, col_multi_hyde = st.columns(3)
+                        with col_multi_rag:
+                            multi_use_rag = st.checkbox("RAG", value=True, key="multi_rag")
+                        with col_multi_memory:
+                            multi_use_memory = st.checkbox("Memory", value=True, key="multi_memory")
+                        with col_multi_hyde:
+                            multi_use_hyde = st.checkbox("HYDE", value=True, key="multi_hyde")
+                        
+                        multi_approaches = []
+                        if multi_use_rag:
+                            multi_approaches.append("rag")
+                        if multi_use_memory:
+                            multi_approaches.append("memory")
+                        if multi_use_hyde:
+                            multi_approaches.append("hyde")
+                        
+                        if multi_approaches:
+                            if st.button("🚀 Start Multi-Document Processing", type="primary", key="multi_process"):
+                                st.warning("🚧 Multi-document processing will be implemented in a future update!")
+                                st.info("For now, please process documents one at a time using the single document processor above.")
                 
                 # Display processing status
                 if 'status' in st.session_state.processing_status:
