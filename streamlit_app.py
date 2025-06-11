@@ -27,15 +27,15 @@ st.set_page_config(
 
 # Initialize session state
 if 'processor' not in st.session_state:
-    st.session_state.processor = None
+    st.session_state['processor'] = None
 if 'questions_df' not in st.session_state:
-    st.session_state.questions_df = None
+    st.session_state['questions_df'] = None
 if 'question_tree' not in st.session_state:
-    st.session_state.question_tree = None
+    st.session_state['question_tree'] = None
 if 'document_loaded' not in st.session_state:
-    st.session_state.document_loaded = False
+    st.session_state['document_loaded'] = False
 if 'processing_status' not in st.session_state:
-    st.session_state.processing_status = {
+    st.session_state['processing_status'] = {
         'status': 'idle',
         'current_question': None,
         'completed_questions': [],
@@ -45,13 +45,13 @@ if 'processing_status' not in st.session_state:
         'error': None
     }
 if 'document_metadata' not in st.session_state:
-    st.session_state.document_metadata = None
+    st.session_state['document_metadata'] = None
 if 'available_documents' not in st.session_state:
-    st.session_state.available_documents = []
+    st.session_state['available_documents'] = []
 if 'selected_document' not in st.session_state:
-    st.session_state.selected_document = None
+    st.session_state['selected_document'] = None
 if 'aws_credentials' not in st.session_state:
-    st.session_state.aws_credentials = None
+    st.session_state['aws_credentials'] = None
 
 
 def load_questions_from_csv(csv_file) -> Optional[pd.DataFrame]:
@@ -108,9 +108,9 @@ def highlight_page_citations(text: str) -> str:
 
 def display_document_metadata():
     """Display document metadata information if available."""
-    if st.session_state.processor and st.session_state.document_metadata:
+    if st.session_state['processor'] and st.session_state['document_metadata']:
         with st.expander("📄 Document Information", expanded=False):
-            metadata = st.session_state.document_metadata
+            metadata = st.session_state['document_metadata']
             
             col1, col2, col3 = st.columns(3)
             
@@ -197,7 +197,7 @@ def run_batch_processing(processor: AuditProcessor, approaches: List[str], use_r
         total_questions = len(ordered_questions)
         total_operations = total_questions * len(approaches)
         
-        st.session_state.processing_status.update({
+        st.session_state['processing_status'].update({
             'status': 'running',
             'total_questions': total_questions,
             'completed_questions': [],
@@ -210,7 +210,7 @@ def run_batch_processing(processor: AuditProcessor, approaches: List[str], use_r
         
         # Process questions in dependency order
         for question in ordered_questions:
-            st.session_state.processing_status['current_question'] = {
+            st.session_state['processing_status']['current_question'] = {
                 'id': question.id,
                 'text': question.text[:100] + "..." if len(question.text) > 100 else question.text
             }
@@ -218,7 +218,7 @@ def run_batch_processing(processor: AuditProcessor, approaches: List[str], use_r
             question_success = True
             
             for approach in approaches:
-                st.session_state.processing_status['current_approach'] = approach.upper()
+                st.session_state['processing_status']['current_approach'] = approach.upper()
                 
                 try:
                     if approach.lower() == "rag":
@@ -238,10 +238,10 @@ def run_batch_processing(processor: AuditProcessor, approaches: List[str], use_r
                     question_success = False
                 
                 completed_operations += 1
-                st.session_state.processing_status['progress'] = (completed_operations / total_operations) * 100
+                st.session_state['processing_status']['progress'] = (completed_operations / total_operations) * 100
             
             # Mark question as completed
-            st.session_state.processing_status['completed_questions'].append({
+            st.session_state['processing_status']['completed_questions'].append({
                 'id': question.id,
                 'text': question.text[:50] + "..." if len(question.text) > 50 else question.text,
                 'success': question_success
@@ -255,7 +255,7 @@ def run_batch_processing(processor: AuditProcessor, approaches: List[str], use_r
         processor.save_results(temp_file.name)
         
         # Update final status
-        st.session_state.processing_status.update({
+        st.session_state['processing_status'].update({
             'status': 'completed',
             'results_file': temp_file.name,
             'accuracy_scores': accuracy_scores,
@@ -265,7 +265,7 @@ def run_batch_processing(processor: AuditProcessor, approaches: List[str], use_r
         })
             
     except Exception as e:
-        st.session_state.processing_status.update({
+        st.session_state['processing_status'].update({
             'status': 'error',
             'error': str(e),
             'current_question': None,
@@ -459,7 +459,7 @@ def main():
     st.markdown("Process audit questions using RAG, Memory, and HYDE approaches with **enhanced page citations**")
     
     # Display document metadata if available
-    if st.session_state.document_loaded:
+    if st.session_state['document_loaded']:
         display_document_metadata()
     
     # Sidebar for configuration
@@ -472,12 +472,12 @@ def main():
         
         # Reset credentials if profile changes
         if 'last_profile' not in st.session_state:
-            st.session_state.last_profile = profile_name
-        elif st.session_state.last_profile != profile_name:
-            st.session_state.aws_credentials = None
-            st.session_state.available_documents = []
-            st.session_state.selected_document = None
-            st.session_state.last_profile = profile_name
+            st.session_state['last_profile'] = profile_name
+        elif st.session_state['last_profile'] != profile_name:
+            st.session_state['aws_credentials'] = None
+            st.session_state['available_documents'] = []
+            st.session_state['selected_document'] = None
+            st.session_state['last_profile'] = profile_name
         
         # Model Configuration Section
         st.subheader("🤖 Model Configuration")
@@ -503,7 +503,7 @@ def main():
         force_reprocess = st.checkbox("Force Reprocess", value=False, help="Force reprocessing even if processed document exists")
         
         # File Upload Section
-        if s3_bucket and st.session_state.aws_credentials:
+        if s3_bucket and st.session_state['aws_credentials']:
             st.subheader("📤 Upload Financial Statements")
             uploaded_files = st.file_uploader(
                 "Upload PDF files", 
@@ -521,7 +521,7 @@ def main():
                             file_content, 
                             uploaded_file.name, 
                             s3_bucket, 
-                            st.session_state.aws_credentials
+                            st.session_state['aws_credentials']
                         )
                         if success:
                             upload_success_count += 1
@@ -529,26 +529,26 @@ def main():
                     if upload_success_count > 0:
                         st.success(f"✅ Successfully uploaded {upload_success_count} file(s)")
                         # Refresh the available documents list
-                        st.session_state.available_documents = list_financial_statements(
+                        st.session_state['available_documents'] = list_financial_statements(
                             s3_bucket, 
-                            st.session_state.aws_credentials
+                            st.session_state['aws_credentials']
                         )
                         st.rerun()
             
             # Display available documents
             st.subheader("📋 Available Financial Statements")
             if st.button("🔄 Refresh Document List"):
-                st.session_state.available_documents = list_financial_statements(
+                st.session_state['available_documents'] = list_financial_statements(
                     s3_bucket, 
-                    st.session_state.aws_credentials
+                    st.session_state['aws_credentials']
                 )
                 st.rerun()
             
-            if st.session_state.available_documents:
-                st.write(f"Found {len(st.session_state.available_documents)} financial statement(s):")
+            if st.session_state['available_documents']:
+                st.write(f"Found {len(st.session_state['available_documents'])} financial statement(s):")
                 
                 # Create a DataFrame for better display
-                docs_df = pd.DataFrame(st.session_state.available_documents)
+                docs_df = pd.DataFrame(st.session_state['available_documents'])
                 docs_df['size_mb'] = docs_df['size'] / (1024 * 1024)
                 docs_df['modified'] = pd.to_datetime(docs_df['modified']).dt.strftime('%Y-%m-%d %H:%M')
                 
@@ -562,17 +562,17 @@ def main():
                 st.subheader("📄 Select Document to Process")
                 selected_doc_name = st.selectbox(
                     "Choose a financial statement",
-                    options=[doc['filename'] for doc in st.session_state.available_documents],
-                    format_func=lambda x: f"{x} ({next((doc['size']/1024/1024) for doc in st.session_state.available_documents if doc['filename'] == x):.1f} MB)"
+                    options=[doc['filename'] for doc in st.session_state['available_documents']],
+                    format_func=lambda x: f"{x} ({next((doc['size']/1024/1024) for doc in st.session_state['available_documents'] if doc['filename'] == x):.1f} MB)"
                 )
                 
                 if selected_doc_name:
-                    selected_doc = next(doc for doc in st.session_state.available_documents if doc['filename'] == selected_doc_name)
-                    st.session_state.selected_document = selected_doc
+                    selected_doc = next(doc for doc in st.session_state['available_documents'] if doc['filename'] == selected_doc_name)
+                    st.session_state['selected_document'] = selected_doc
             else:
                 st.info("No financial statements found. Upload some PDF files to get started!")
         
-        elif s3_bucket and not st.session_state.aws_credentials:
+        elif s3_bucket and not st.session_state['aws_credentials']:
             st.warning("⚠️ Please configure AWS credentials first to upload and list documents")
     
     # Main content area
@@ -587,7 +587,7 @@ def main():
         if uploaded_file is not None:
             questions_df = load_questions_from_csv(uploaded_file)
             if questions_df is not None:
-                st.session_state.questions_df = questions_df
+                st.session_state['questions_df'] = questions_df
                 st.success(f"Loaded {len(questions_df)} questions")
                 
                 # Display questions preview
@@ -595,15 +595,15 @@ def main():
                 st.dataframe(questions_df[['id', 'question']].head(10), use_container_width=True)
         
         # Load default sample questions if available
-        if st.session_state.questions_df is None and Path("sample_questions.csv").exists():
+        if st.session_state['questions_df'] is None and Path("sample_questions.csv").exists():
             if st.button("Load Sample Questions"):
                 try:
                     questions_df = pd.read_csv("sample_questions.csv")
                     # Ensure ID column is treated as string
                     if 'id' in questions_df.columns:
                         questions_df['id'] = questions_df['id'].astype(str).str.strip()
-                    st.session_state.questions_df = questions_df
-                    st.success(f"Loaded {len(st.session_state.questions_df)} sample questions")
+                    st.session_state['questions_df'] = questions_df
+                    st.success(f"Loaded {len(st.session_state['questions_df'])} sample questions")
                 except Exception as e:
                     st.error(f"Error loading sample questions: {e}")
     
@@ -611,25 +611,25 @@ def main():
         st.header("🚀 Processing")
         
         # Get AWS credentials and store them in session state
-        if profile_name and not st.session_state.aws_credentials:
+        if profile_name and not st.session_state['aws_credentials']:
             with st.spinner("Loading AWS credentials..."):
                 aws_credentials = get_aws_credentials_from_profile(profile_name)
                 if aws_credentials:
-                    st.session_state.aws_credentials = aws_credentials
+                    st.session_state['aws_credentials'] = aws_credentials
                     # Also load available documents
                     if s3_bucket:
-                        st.session_state.available_documents = list_financial_statements(
+                        st.session_state['available_documents'] = list_financial_statements(
                             s3_bucket, 
-                            st.session_state.aws_credentials
+                            st.session_state['aws_credentials']
                         )
                     st.rerun()
                 else:
                     st.error("❌ Failed to get AWS credentials from profile")
         
         # Check if we have all required inputs
-        has_credentials = st.session_state.aws_credentials is not None
-        has_document = s3_bucket and st.session_state.selected_document is not None
-        has_questions = st.session_state.questions_df is not None
+        has_credentials = st.session_state['aws_credentials'] is not None
+        has_document = s3_bucket and st.session_state['selected_document'] is not None
+        has_questions = st.session_state['questions_df'] is not None
         
         if not has_credentials:
             st.warning("⚠️ Please select an AWS profile")
@@ -653,25 +653,25 @@ def main():
                     )
                     
                     # Create processor
-                    processor = create_processor(st.session_state.aws_credentials, model_config, use_rag_query_rewriting)
+                    processor = create_processor(st.session_state['aws_credentials'], model_config, use_rag_query_rewriting)
                     
                     if processor:
                         # Load document using selected document
-                        selected_doc = st.session_state.selected_document
+                        selected_doc = st.session_state['selected_document']
                         success = processor.load_document(s3_bucket, selected_doc['key'], force_reprocess=force_reprocess)
                         if success:
                             # Store document metadata
-                            st.session_state.document_metadata = processor.document_processor.get_document_summary()
+                            st.session_state['document_metadata'] = processor.document_processor.get_document_summary()
                             
                             # Create temporary CSV file for questions
                             temp_csv = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
-                            st.session_state.questions_df.to_csv(temp_csv.name, index=False)
+                            st.session_state['questions_df'].to_csv(temp_csv.name, index=False)
                             temp_csv.close()
                             
                             # Load questions
                             if processor.load_questions(temp_csv.name):
-                                st.session_state.processor = processor
-                                st.session_state.document_loaded = True
+                                st.session_state['processor'] = processor
+                                st.session_state['document_loaded'] = True
                                 st.success(f"✅ Processor initialized and document '{selected_doc['filename']}' loaded successfully!")
                                 
                                 # Show metadata status
@@ -692,11 +692,11 @@ def main():
                             st.error("❌ Failed to load document")
             
             # Single question processing
-            if st.session_state.processor and st.session_state.document_loaded:
+            if st.session_state['processor'] and st.session_state['document_loaded']:
                 st.subheader("🎯 Single Question Processing")
                 
                 # Question selection
-                question_options = [(str(row['id']).strip(), f"{str(row['id']).strip()}: {row['question'][:100]}...") for _, row in st.session_state.questions_df.iterrows()]
+                question_options = [(str(row['id']).strip(), f"{str(row['id']).strip()}: {row['question'][:100]}...") for _, row in st.session_state['questions_df'].iterrows()]
                 selected_question = st.selectbox(
                     "Select Question",
                     options=[opt[0] for opt in question_options],
@@ -724,7 +724,7 @@ def main():
                 if selected_approaches and st.button("🔍 Process Question"):
                     with st.spinner("Processing question..."):
                         results = process_single_question(
-                            st.session_state.processor, 
+                            st.session_state['processor'], 
                             selected_question, 
                             selected_approaches,
                             use_rag_query_rewriting
@@ -802,7 +802,7 @@ def main():
                 if batch_approaches:
                     if st.button("🚀 Start Batch Processing", type="primary"):
                         # Initialize processing status
-                        st.session_state.processing_status = {
+                        st.session_state['processing_status'] = {
                             'status': 'starting',
                             'current_question': None,
                             'completed_questions': [],
@@ -815,21 +815,21 @@ def main():
                         # Start processing in a thread
                         thread = threading.Thread(
                             target=run_batch_processing,
-                            args=(st.session_state.processor, batch_approaches, use_rag_query_rewriting)
+                            args=(st.session_state['processor'], batch_approaches, use_rag_query_rewriting)
                         )
                         thread.start()
                         st.success("🚀 Batch processing started!")
                         st.rerun()
                 
                 # Multi-Document Processing Section
-                if len(st.session_state.available_documents) > 1:
+                if len(st.session_state['available_documents']) > 1:
                     st.subheader("📚 Multi-Document Processing")
                     st.write("Process questions across multiple financial statements")
                     
                     # Document selection for multi-processing
                     selected_docs = st.multiselect(
                         "Select documents for batch processing",
-                        options=[doc['filename'] for doc in st.session_state.available_documents],
+                        options=[doc['filename'] for doc in st.session_state['available_documents']],
                         default=None,
                         help="Select multiple documents to process with the same questions"
                     )
@@ -860,18 +860,18 @@ def main():
                                 st.info("For now, please process documents one at a time using the single document processor above.")
                 
                 # Display processing status
-                if 'status' in st.session_state.processing_status:
-                    status = st.session_state.processing_status['status']
+                if 'status' in st.session_state['processing_status']:
+                    status = st.session_state['processing_status']['status']
                     
                     if status == 'starting':
                         st.info("🔄 Starting batch processing...")
                     elif status == 'running':
                         # Show detailed progress
-                        progress = st.session_state.processing_status.get('progress', 0)
-                        current_question = st.session_state.processing_status.get('current_question')
-                        current_approach = st.session_state.processing_status.get('current_approach')
-                        completed_questions = st.session_state.processing_status.get('completed_questions', [])
-                        total_questions = st.session_state.processing_status.get('total_questions', 0)
+                        progress = st.session_state['processing_status'].get('progress', 0)
+                        current_question = st.session_state['processing_status'].get('current_question')
+                        current_approach = st.session_state['processing_status'].get('current_approach')
+                        completed_questions = st.session_state['processing_status'].get('completed_questions', [])
+                        total_questions = st.session_state['processing_status'].get('total_questions', 0)
                         
                         st.info("🔄 Processing questions... This may take several minutes.")
                         
@@ -907,9 +907,9 @@ def main():
                         st.success("✅ Batch processing completed successfully!")
                         
                         # Display accuracy scores if available
-                        if 'accuracy_scores' in st.session_state.processing_status:
+                        if 'accuracy_scores' in st.session_state['processing_status']:
                             st.subheader("🎯 Accuracy Scores")
-                            accuracy_scores = st.session_state.processing_status['accuracy_scores']
+                            accuracy_scores = st.session_state['processing_status']['accuracy_scores']
                             
                             # Create columns for accuracy display
                             cols = st.columns(len(accuracy_scores))
@@ -933,7 +933,7 @@ def main():
                             st.info(f"🏆 **Best performing approach**: {approach_names.get(best_approach[0], best_approach[0].upper())} with {best_approach[1]:.1%} accuracy")
                         
                         # Show enhanced results info
-                        if st.session_state.document_metadata and st.session_state.document_metadata.get('has_metadata'):
+                        if st.session_state['document_metadata'] and st.session_state['document_metadata'].get('has_metadata'):
                             st.success("🎯 **Results include page citations!** Download the CSV to see specific page references in the explanation columns.")
                         else:
                             st.info("📝 Results saved with standard explanations (no page citations available).")
@@ -941,9 +941,9 @@ def main():
                         st.info("📁 Results have been saved and stored in S3 as configured.")
                         
                         # Offer to download results
-                        if 'results_file' in st.session_state.processing_status:
+                        if 'results_file' in st.session_state['processing_status']:
                             try:
-                                with open(st.session_state.processing_status['results_file'], 'r') as f:
+                                with open(st.session_state['processing_status']['results_file'], 'r') as f:
                                     results_csv = f.read()
                                 st.download_button(
                                     label="📥 Download Results CSV",
@@ -956,7 +956,7 @@ def main():
                         
                         # Clear status after showing
                         if st.button("🔄 Reset Status"):
-                            st.session_state.processing_status = {
+                            st.session_state['processing_status'] = {
                                 'status': 'idle',
                                 'current_question': None,
                                 'completed_questions': [],
@@ -968,10 +968,10 @@ def main():
                             st.rerun()
                             
                     elif status == 'error':
-                        st.error(f"❌ Error during batch processing: {st.session_state.processing_status.get('error', 'Unknown error')}")
+                        st.error(f"❌ Error during batch processing: {st.session_state['processing_status'].get('error', 'Unknown error')}")
                         
                         # Show partial progress if any questions were completed
-                        completed_questions = st.session_state.processing_status.get('completed_questions', [])
+                        completed_questions = st.session_state['processing_status'].get('completed_questions', [])
                         if completed_questions:
                             st.info(f"ℹ️ {len(completed_questions)} questions were processed before the error occurred")
                             with st.expander("📋 Completed Questions", expanded=False):
@@ -980,7 +980,7 @@ def main():
                                     st.write(f"{status_icon} **{q['id']}:** {q['text']}")
                         
                         if st.button("🔄 Reset Status"):
-                            st.session_state.processing_status = {
+                            st.session_state['processing_status'] = {
                                 'status': 'idle',
                                 'current_question': None,
                                 'completed_questions': [],
