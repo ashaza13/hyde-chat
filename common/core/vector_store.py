@@ -83,12 +83,14 @@ class ChromaVectorStore:
         documents = []
         
         for i, chunk in enumerate(chunks):
-            # Create metadata for the chunk
+            # Create metadata for the chunk - convert lists to strings for ChromaDB compatibility
             metadata = {
                 "chunk_id": i,
-                "page_numbers": chunk.page_numbers,
+                "page_numbers_str": ",".join(map(str, chunk.page_numbers)),  # Convert list to comma-separated string
+                "start_page": chunk.start_page,
+                "end_page": chunk.end_page,
+                "chunk_index": chunk.chunk_index,
                 "page_range": chunk.get_page_range_str(),
-                "chunk_type": getattr(chunk, 'chunk_type', 'text'),
                 "source": getattr(chunk, 'source', 'unknown')
             }
             
@@ -129,11 +131,17 @@ class ChromaVectorStore:
         # Convert results back to TextChunk format
         chunk_results = []
         for doc, score in results:
-            # Reconstruct TextChunk from Document
+            # Reconstruct page_numbers list from comma-separated string
+            page_numbers_str = doc.metadata.get("page_numbers_str", "")
+            page_numbers = [int(p) for p in page_numbers_str.split(",") if p.strip()] if page_numbers_str else []
+            
+            # Reconstruct TextChunk from Document with all required parameters
             chunk = TextChunk(
                 text=doc.page_content,
-                page_numbers=doc.metadata.get("page_numbers", []),
-                chunk_type=doc.metadata.get("chunk_type", "text")
+                page_numbers=page_numbers,
+                start_page=doc.metadata.get("start_page", page_numbers[0] if page_numbers else 1),
+                end_page=doc.metadata.get("end_page", page_numbers[-1] if page_numbers else 1),
+                chunk_index=doc.metadata.get("chunk_index", 0)
             )
             
             # Add source if available

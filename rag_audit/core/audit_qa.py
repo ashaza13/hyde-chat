@@ -41,6 +41,10 @@ class RAGLangGraphAuditQA(BaseLangGraphAuditWorkflow):
         """
         self.use_query_rewriting = use_query_rewriting
         
+        # Initialize metadata attributes
+        self.has_metadata = False
+        self.chunks_with_metadata = []
+        
         super().__init__(
             aws_region=aws_region,
             aws_access_key_id=aws_access_key_id,
