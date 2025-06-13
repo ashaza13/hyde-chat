@@ -166,11 +166,37 @@ class AuditProcessor:
             except Exception as e:
                 print(f"  Error getting vector store stats: {e}")
             
-            # Set chunks with metadata for RAG and HYDE approaches (only they support vectordb metadata)
-            print("📥 Adding chunks to RAG vector store...")
-            self.rag_qa.set_document_chunks_with_metadata(chunks_with_metadata)
-            print("📥 Adding chunks to HyDE vector store...")
-            self.hyde_qa.set_document_chunks_with_metadata(chunks_with_metadata)
+            # Clear the shared vector store once before adding new document chunks
+            print("🗑️ Clearing shared vector store before adding new document...")
+            try:
+                self.rag_qa.vector_store.clear()  # Only need to clear once since all approaches share the same store
+                print("✅ Successfully cleared shared vector store")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not clear shared vector store: {e}")
+            
+            # Add chunks to shared vector store once (to avoid duplicates)
+            print("📥 Adding chunks to shared vector store...")
+            try:
+                self.rag_qa.vector_store.add_chunks(chunks_with_metadata)
+                print(f"✅ Successfully added {len(chunks_with_metadata)} chunks to shared vector store")
+            except Exception as e:
+                print(f"❌ Error adding chunks to shared vector store: {e}")
+            
+            # Set chunks with metadata for all approaches (without adding to vector store again)
+            print("📥 Setting chunks for RAG approach...")
+            self.rag_qa.chunks_with_metadata = chunks_with_metadata
+            self.rag_qa.has_metadata = True
+            self.rag_qa.document_text = "\n\n".join(chunk.text for chunk in chunks_with_metadata)
+            
+            print("📥 Setting chunks for HyDE approach...")
+            self.hyde_qa.chunks_with_metadata = chunks_with_metadata
+            self.hyde_qa.has_metadata = True
+            self.hyde_qa.document_text = "\n\n".join(chunk.text for chunk in chunks_with_metadata)
+            
+            print("📥 Setting chunks for Memory approach...")
+            self.memory_qa.chunks_with_metadata = chunks_with_metadata
+            self.memory_qa.has_metadata = True
+            self.memory_qa.document_text = "\n\n".join(chunk.text for chunk in chunks_with_metadata)
             
             # Debug: Show vector store status after updating
             print("\n🔍 VECTOR STORE DEBUG - After updating:")
@@ -200,6 +226,14 @@ class AuditProcessor:
                 print(f"  RAG Vector Store - Documents: {rag_stats.get('document_count', 0)}")
             except Exception as e:
                 print(f"  Error getting vector store stats: {e}")
+            
+            # Clear the shared vector store once before adding new document
+            print("🗑️ Clearing shared vector store before adding new document...")
+            try:
+                self.rag_qa.vector_store.clear()  # Only need to clear once since all approaches share the same store
+                print("✅ Successfully cleared shared vector store")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not clear shared vector store: {e}")
             
             # Set the document text in each of the audit QA instances (original approach)
             self.memory_qa.set_document_text(document_text)

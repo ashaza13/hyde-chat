@@ -65,12 +65,7 @@ class PDFMemoryLangGraphAuditQA(BaseLangGraphAuditWorkflow):
         self.chunks_with_metadata = []
         self.has_metadata = False
         
-        # Clear vector store when setting plain text
-        if self.vector_store:
-            try:
-                self.vector_store.clear()
-            except Exception as e:
-                print(f"Warning: Could not clear vector store: {e}")
+        # Note: Vector store clearing is now handled centrally in AuditProcessor to avoid conflicts with shared store
     
     def set_document_chunks_with_metadata(self, chunks: List[TextChunk]) -> None:
         """
@@ -84,15 +79,18 @@ class PDFMemoryLangGraphAuditQA(BaseLangGraphAuditWorkflow):
         # Also set the document text for backward compatibility
         self.document_text = "\n\n".join(chunk.text for chunk in chunks)
         
-        # Clear and re-populate vector store for consistency (even though Memory approach uses all chunks)
+        # Add chunks to shared vector store (don't clear since multiple approaches share the same store)
         if self.vector_store:
             try:
-                # Clear existing data to avoid stale chunks
-                self.vector_store.clear()
-                # Add new chunks
+                # Add new chunks to shared vector store
                 if chunks:
+                    print(f"🔍 MEMORY DEBUG - Adding {len(chunks)} chunks to shared vector store")
                     self.vector_store.add_chunks(chunks)
+                    print(f"✅ MEMORY DEBUG - Successfully added chunks to shared vector store")
+                else:
+                    print(f"⚠️ MEMORY DEBUG - No chunks to add to vector store")
             except Exception as e:
+                print(f"❌ MEMORY DEBUG - Could not update vector store: {e}")
                 print(f"Warning: Could not update vector store: {e}")
     
         def answer_question(self, question_text: str, context: Optional[str] = None) -> 'AuditResponse':

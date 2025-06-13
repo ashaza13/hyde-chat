@@ -273,12 +273,7 @@ Provide your response in the exact JSON format specified above. Your explanation
         self.chunks_with_metadata = []
         self.has_metadata = False
         
-        # Clear vector store when setting plain text
-        if self.vector_store:
-            try:
-                self.vector_store.clear()
-            except Exception as e:
-                print(f"Warning: Could not clear vector store: {e}")
+        # Note: Vector store clearing is now handled centrally in AuditProcessor to avoid conflicts with shared store
     
     def set_document_chunks_with_metadata(self, chunks: List[TextChunk]) -> None:
         """
@@ -296,17 +291,14 @@ Provide your response in the exact JSON format specified above. Your explanation
         
         print(f"🔍 RAG DEBUG - Set has_metadata={self.has_metadata}, chunks count={len(self.chunks_with_metadata)}")
         
-        # Clear and re-populate vector store for semantic search
+        # Add chunks to shared vector store (don't clear since multiple approaches share the same store)
         if self.vector_store:
             try:
-                print(f"🔍 RAG DEBUG - Clearing vector store before adding new chunks")
-                # Clear existing data to avoid stale chunks
-                self.vector_store.clear()
-                # Add new chunks
+                # Add new chunks to shared vector store
                 if chunks:
-                    print(f"🔍 RAG DEBUG - Adding {len(chunks)} chunks to vector store")
+                    print(f"🔍 RAG DEBUG - Adding {len(chunks)} chunks to shared vector store")
                     self.vector_store.add_chunks(chunks)
-                    print(f"✅ RAG DEBUG - Successfully added chunks to vector store")
+                    print(f"✅ RAG DEBUG - Successfully added chunks to shared vector store")
                 else:
                     print(f"⚠️ RAG DEBUG - No chunks to add to vector store")
             except Exception as e:
