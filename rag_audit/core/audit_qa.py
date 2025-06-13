@@ -143,7 +143,11 @@ Rewritten query for vector search (just return the rewritten query without expla
             Updated workflow state
         """
         try:
-            if state.get("document_chunks"):
+            # Check if we have chunks available (either in state or in instance)
+            has_chunks = (state.get("document_chunks") or 
+                         (hasattr(self, 'chunks_with_metadata') and self.chunks_with_metadata))
+            
+            if has_chunks:
                 # Use direct question for vector search
                 search_results = self.vector_store.similarity_search(
                     query=state["question"],
@@ -157,13 +161,17 @@ Rewritten query for vector search (just return the rewritten query without expla
                 
                 state["retrieved_chunks"] = retrieved_chunks
             else:
+                # No chunks available
                 state["retrieved_chunks"] = []
+                state["error"] = "No document chunks available for retrieval"
             
             state["next_action"] = "generate_answer"
             
         except Exception as e:
-            # Fallback to using all chunks if vector search fails
-            state["retrieved_chunks"] = state.get("document_chunks", [])[:3]
+            # Fallback to using chunks from state or instance attributes
+            fallback_chunks = (state.get("document_chunks", []) or 
+                             getattr(self, 'chunks_with_metadata', []))
+            state["retrieved_chunks"] = fallback_chunks[:3]
             state["error"] = f"Vector search failed, using fallback: {str(e)}"
         
         return state
@@ -179,7 +187,11 @@ Rewritten query for vector search (just return the rewritten query without expla
             Updated workflow state
         """
         try:
-            if state.get("document_chunks"):
+            # Check if we have chunks available (either in state or in instance)
+            has_chunks = (state.get("document_chunks") or 
+                         (hasattr(self, 'chunks_with_metadata') and self.chunks_with_metadata))
+            
+            if has_chunks:
                 # Use rewritten query for vector search
                 search_query = state.get("rewritten_question", state["question"])
                 search_results = self.vector_store.similarity_search(
@@ -194,13 +206,17 @@ Rewritten query for vector search (just return the rewritten query without expla
                 
                 state["retrieved_chunks"] = retrieved_chunks
             else:
+                # No chunks available
                 state["retrieved_chunks"] = []
+                state["error"] = "No document chunks available for retrieval"
             
             state["next_action"] = "generate_answer"
             
         except Exception as e:
-            # Fallback to using all chunks if vector search fails
-            state["retrieved_chunks"] = state.get("document_chunks", [])[:3]
+            # Fallback to using chunks from state or instance attributes
+            fallback_chunks = (state.get("document_chunks", []) or 
+                             getattr(self, 'chunks_with_metadata', []))
+            state["retrieved_chunks"] = fallback_chunks[:3]
             state["error"] = f"Vector search failed, using fallback: {str(e)}"
         
         return state

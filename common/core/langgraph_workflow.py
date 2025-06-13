@@ -176,8 +176,33 @@ class BaseLangGraphAuditWorkflow:
         Returns:
             Updated workflow state
         """
-        # Default implementation: use all chunks
-        state["retrieved_chunks"] = state.get("document_chunks", [])
+        # Try to get chunks from multiple sources:
+        # 1. From the workflow state (passed in run_workflow)
+        # 2. From instance attributes (set via set_document_chunks_with_metadata)
+        # 3. From vector store (if it has documents)
+        
+        retrieved_chunks = []
+        
+        # First, try to use chunks from state
+        state_chunks = state.get("document_chunks", [])
+        if state_chunks:
+            retrieved_chunks = state_chunks
+        else:
+            # Try to get chunks from instance attributes
+            if hasattr(self, 'chunks_with_metadata') and self.chunks_with_metadata:
+                retrieved_chunks = self.chunks_with_metadata
+            else:
+                # Last resort: try to get from vector store stats
+                try:
+                    stats = self.vector_store.get_collection_stats()
+                    if stats.get("document_count", 0) > 0:
+                        # Vector store has documents but we don't have direct access to chunks
+                        # This shouldn't happen in normal operation, but let's handle it gracefully
+                        print("Warning: Vector store has documents but no chunks available in workflow")
+                except Exception:
+                    pass
+        
+        state["retrieved_chunks"] = retrieved_chunks
         state["next_action"] = "generate_answer"
         return state
     
@@ -286,6 +311,10 @@ If you reference information from the context, please include the citation numbe
         Args:
             chunks: List of TextChunk objects
         """
+        # Store chunks as instance attributes for easy access
+        self.chunks_with_metadata = chunks
+        self.has_metadata = True
+        
         # Add chunks to vector store
         if self.vector_store and chunks:
             self.vector_store.clear()
