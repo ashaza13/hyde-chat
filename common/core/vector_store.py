@@ -80,6 +80,8 @@ class ChromaVectorStore:
         Args:
             chunks: List of TextChunk objects to add
         """
+        print(f"🔍 VECTOR STORE DEBUG - Adding {len(chunks)} chunks to collection '{self.collection_name}'")
+        
         documents = []
         
         for i, chunk in enumerate(chunks):
@@ -100,9 +102,19 @@ class ChromaVectorStore:
                 metadata=metadata
             )
             documents.append(doc)
+            
+            # Debug: Show first few chunks being added
+            if i < 3:
+                print(f"  Chunk {i}: Pages {chunk.get_page_range_str()}, Text: {chunk.text[:100]}...")
         
         # Add documents to vector store
-        self.vectorstore.add_documents(documents)
+        try:
+            print(f"🔍 VECTOR STORE DEBUG - Calling vectorstore.add_documents() with {len(documents)} documents")
+            self.vectorstore.add_documents(documents)
+            print(f"✅ VECTOR STORE DEBUG - Successfully added {len(documents)} documents")
+        except Exception as e:
+            print(f"❌ VECTOR STORE DEBUG - Error adding documents: {e}")
+            raise
     
     def similarity_search(
         self,
@@ -218,7 +230,13 @@ class ChromaVectorStore:
         """
         Clear all documents from the collection without deleting it.
         """
+        print(f"🔍 VECTOR STORE DEBUG - Clearing collection '{self.collection_name}'")
         try:
+            # Get count before clearing
+            stats_before = self.get_collection_stats()
+            doc_count_before = stats_before.get('document_count', 0)
+            print(f"  Documents before clearing: {doc_count_before}")
+            
             # Delete and recreate the collection
             self.vectorstore.delete_collection()
             self.vectorstore = Chroma(
@@ -226,5 +244,12 @@ class ChromaVectorStore:
                 embedding_function=self.embeddings,
                 persist_directory=str(self.persist_directory)
             )
+            
+            # Get count after clearing
+            stats_after = self.get_collection_stats()
+            doc_count_after = stats_after.get('document_count', 0)
+            print(f"  Documents after clearing: {doc_count_after}")
+            print(f"✅ VECTOR STORE DEBUG - Successfully cleared collection")
         except Exception as e:
+            print(f"❌ VECTOR STORE DEBUG - Error clearing collection: {e}")
             print(f"Warning: Could not clear collection: {e}") 

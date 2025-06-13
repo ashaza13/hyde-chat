@@ -156,25 +156,65 @@ class AuditProcessor:
             
             print(f"Created {len(chunks_with_metadata)} chunks with page metadata")
             
+            # Debug: Show vector store status before updating
+            print("\n🔍 VECTOR STORE DEBUG - Before updating:")
+            try:
+                rag_stats = self.rag_qa.vector_store.get_collection_stats()
+                print(f"  RAG Vector Store - Documents: {rag_stats.get('document_count', 0)}")
+                hyde_stats = self.hyde_qa.vector_store.get_collection_stats()
+                print(f"  HyDE Vector Store - Documents: {hyde_stats.get('document_count', 0)}")
+            except Exception as e:
+                print(f"  Error getting vector store stats: {e}")
+            
             # Set chunks with metadata for RAG and HYDE approaches (only they support vectordb metadata)
+            print("📥 Adding chunks to RAG vector store...")
             self.rag_qa.set_document_chunks_with_metadata(chunks_with_metadata)
+            print("📥 Adding chunks to HyDE vector store...")
             self.hyde_qa.set_document_chunks_with_metadata(chunks_with_metadata)
+            
+            # Debug: Show vector store status after updating
+            print("\n🔍 VECTOR STORE DEBUG - After updating:")
+            try:
+                rag_stats = self.rag_qa.vector_store.get_collection_stats()
+                print(f"  RAG Vector Store - Documents: {rag_stats.get('document_count', 0)}")
+                hyde_stats = self.hyde_qa.vector_store.get_collection_stats()
+                print(f"  HyDE Vector Store - Documents: {hyde_stats.get('document_count', 0)}")
+            except Exception as e:
+                print(f"  Error getting vector store stats: {e}")
             
             # Set document text for memory approach (no metadata support)
             self.memory_qa.set_document_text(document_text)
             
             # Print document summary
             summary = self.document_processor.get_document_summary()
-            print(f"Document Summary:")
+            print(f"\nDocument Summary:")
             for key, value in summary.items():
                 print(f"  {key}: {value}")
         else:
             print("Document processed without detailed metadata - using standard approach")
             
+            # Debug: Show vector store status before updating
+            print("\n🔍 VECTOR STORE DEBUG - Before updating (no metadata):")
+            try:
+                rag_stats = self.rag_qa.vector_store.get_collection_stats()
+                print(f"  RAG Vector Store - Documents: {rag_stats.get('document_count', 0)}")
+            except Exception as e:
+                print(f"  Error getting vector store stats: {e}")
+            
             # Set the document text in each of the audit QA instances (original approach)
             self.memory_qa.set_document_text(document_text)
+            print("📥 Adding document text to RAG (no metadata)...")
             self.rag_qa.set_document_text(document_text)
+            print("📥 Adding document text to HyDE (no metadata)...")
             self.hyde_qa.set_document_text(document_text)
+            
+            # Debug: Show vector store status after updating
+            print("\n🔍 VECTOR STORE DEBUG - After updating (no metadata):")
+            try:
+                rag_stats = self.rag_qa.vector_store.get_collection_stats()
+                print(f"  RAG Vector Store - Documents: {rag_stats.get('document_count', 0)}")
+            except Exception as e:
+                print(f"  Error getting vector store stats: {e}")
         
         self.document_loaded = True
         return True
@@ -287,6 +327,27 @@ class AuditProcessor:
         print(f"Processing question {question_id} with RAG approach...")
         print(f"Question: {question.text}")
         
+        # Debug: Check vector store status before processing
+        print("\n🔍 RAG PROCESSING DEBUG - Vector store status:")
+        try:
+            rag_stats = self.rag_qa.vector_store.get_collection_stats()
+            print(f"  Vector Store - Documents: {rag_stats.get('document_count', 0)}")
+            print(f"  Vector Store - Collection: {rag_stats.get('collection_name', 'Unknown')}")
+            print(f"  Vector Store - Embedding Model: {rag_stats.get('embedding_model', 'Unknown')}")
+        except Exception as e:
+            print(f"  Error getting vector store stats: {e}")
+        
+        # Debug: Test vector search directly
+        print(f"\n🔍 Testing direct vector search for: '{question.text[:50]}...'")
+        try:
+            test_results = self.rag_qa.get_relevant_chunks(question.text, top_k=3)
+            print(f"  Direct search returned {len(test_results)} chunks")
+            for i, (chunk, score) in enumerate(test_results[:2]):
+                print(f"    [{i+1}] Score: {score:.3f}, Page: {chunk.get_page_range_str()}")
+                print(f"        Preview: {chunk.text[:100]}...")
+        except Exception as e:
+            print(f"  Error in direct vector search: {e}")
+        
         # Determine whether to use query rewriting
         should_rewrite = use_query_rewriting if use_query_rewriting is not None else self.use_rag_query_rewriting
         if should_rewrite:
@@ -298,6 +359,7 @@ class AuditProcessor:
             print("Using context from dependencies")
         
         # Process the question with RAG
+        print(f"\n🤖 Calling RAG QA system...")
         response = self.rag_qa.answer_question(
             question.text, 
             context=dependency_context,

@@ -287,21 +287,33 @@ Provide your response in the exact JSON format specified above. Your explanation
         Args:
             chunks: List of TextChunk objects with page metadata
         """
+        print(f"🔍 RAG DEBUG - Setting {len(chunks)} chunks with metadata")
+        
         self.chunks_with_metadata = chunks
         self.has_metadata = True
         # Also set the document text for backward compatibility
         self.document_text = "\n\n".join(chunk.text for chunk in chunks)
         
+        print(f"🔍 RAG DEBUG - Set has_metadata={self.has_metadata}, chunks count={len(self.chunks_with_metadata)}")
+        
         # Clear and re-populate vector store for semantic search
         if self.vector_store:
             try:
+                print(f"🔍 RAG DEBUG - Clearing vector store before adding new chunks")
                 # Clear existing data to avoid stale chunks
                 self.vector_store.clear()
                 # Add new chunks
                 if chunks:
+                    print(f"🔍 RAG DEBUG - Adding {len(chunks)} chunks to vector store")
                     self.vector_store.add_chunks(chunks)
+                    print(f"✅ RAG DEBUG - Successfully added chunks to vector store")
+                else:
+                    print(f"⚠️ RAG DEBUG - No chunks to add to vector store")
             except Exception as e:
+                print(f"❌ RAG DEBUG - Could not update vector store: {e}")
                 print(f"Warning: Could not update vector store: {e}")
+        else:
+            print(f"⚠️ RAG DEBUG - No vector store available")
     
     def get_relevant_chunks(self, query: str, top_k: int = 3) -> List[Tuple[TextChunk, float]]:
         """
@@ -314,17 +326,28 @@ Provide your response in the exact JSON format specified above. Your explanation
         Returns:
             List of tuples with (TextChunk, relevance_score)
         """
+        print(f"🔍 RAG RETRIEVAL DEBUG - Query: '{query[:50]}...', top_k={top_k}")
+        print(f"🔍 RAG RETRIEVAL DEBUG - has_metadata={getattr(self, 'has_metadata', False)}")
+        print(f"🔍 RAG RETRIEVAL DEBUG - chunks_with_metadata count={len(getattr(self, 'chunks_with_metadata', []))}")
+        print(f"🔍 RAG RETRIEVAL DEBUG - vector_store available={self.vector_store is not None}")
+        
         # Use vector store for semantic search if available
         if self.vector_store and self.has_metadata:
             try:
-                return self.vector_store.similarity_search(query, k=top_k)
+                print(f"🔍 RAG RETRIEVAL DEBUG - Using vector store for semantic search")
+                results = self.vector_store.similarity_search(query, k=top_k)
+                print(f"🔍 RAG RETRIEVAL DEBUG - Vector search returned {len(results)} results")
+                return results
             except Exception as e:
+                print(f"❌ RAG RETRIEVAL DEBUG - Vector search failed: {e}")
                 print(f"Vector search failed, falling back to keyword matching: {e}")
         
         # Fallback to keyword-based matching if vector store is not available
         if not self.chunks_with_metadata:
+            print(f"⚠️ RAG RETRIEVAL DEBUG - No chunks_with_metadata available, returning empty list")
             return []
         
+        print(f"🔍 RAG RETRIEVAL DEBUG - Using keyword-based fallback search")
         # Simple keyword-based relevance scoring as fallback
         query_words = set(query.lower().split())
         scored_chunks = []
@@ -338,7 +361,9 @@ Provide your response in the exact JSON format specified above. Your explanation
         
         # Sort by score and return top_k
         scored_chunks.sort(key=lambda x: x[1], reverse=True)
-        return scored_chunks[:top_k]
+        results = scored_chunks[:top_k]
+        print(f"🔍 RAG RETRIEVAL DEBUG - Keyword search returned {len(results)} results")
+        return results
     
     def rewrite_query_for_vector_search(self, original_query: str) -> str:
         """
