@@ -60,7 +60,11 @@ class AuditProcessor:
         if vector_store is None:
             vector_store = ChromaVectorStore(
                 collection_name="audit_documents",
-                embedding_model_name="all-MiniLM-L6-v2"
+                embedding_model_name="amazon.titan-embed-text-v2:0",
+                aws_region=aws_region,
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token
             )
         
         # Initialize the central document processor

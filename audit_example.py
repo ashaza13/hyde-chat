@@ -49,7 +49,7 @@ def main():
     # Initialize shared vector store
     vector_store = ChromaVectorStore(
         collection_name="demo_audit_docs",
-        embedding_model_name="all-MiniLM-L6-v2"
+        embedding_model_name="amazon.titan-embed-text-v2:0"
     )
     
     # Create sample document chunks

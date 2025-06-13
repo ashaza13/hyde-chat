@@ -67,7 +67,7 @@ class BaseLangGraphAuditWorkflow:
         aws_session_token: Optional[str] = None,
         model_config: Optional[BedrockModelConfig] = None,
         vector_store: Optional[ChromaVectorStore] = None,
-        embedding_model_name: str = "all-MiniLM-L6-v2"
+        embedding_model_name: str = "amazon.titan-embed-text-v2:0"
     ):
         """
         Initialize the base workflow.
@@ -108,7 +108,11 @@ class BaseLangGraphAuditWorkflow:
         # Initialize vector store
         if vector_store is None:
             self.vector_store = ChromaVectorStore(
-                embedding_model_name=embedding_model_name
+                embedding_model_name=embedding_model_name,
+                aws_region=aws_region,
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token
             )
         else:
             self.vector_store = vector_store

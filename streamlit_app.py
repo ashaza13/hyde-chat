@@ -72,7 +72,11 @@ def create_processor(aws_credentials: Dict[str, str], model_config: BedrockModel
         # Create shared vector store for all approaches
         vector_store = ChromaVectorStore(
             collection_name="streamlit_audit_docs",
-            embedding_model_name="all-MiniLM-L6-v2"
+            embedding_model_name="amazon.titan-embed-text-v2:0",
+            aws_region=aws_credentials.get('region', 'us-gov-west-1'),
+            aws_access_key_id=aws_credentials.get('access_key_id'),
+            aws_secret_access_key=aws_credentials.get('secret_access_key'),
+            aws_session_token=aws_credentials.get('session_token')
         )
         
         processor = AuditProcessor(

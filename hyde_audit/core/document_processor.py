@@ -18,7 +18,7 @@ except ImportError:
 class DocumentProcessor:
     """Class for processing financial documents and creating embeddings."""
     
-    def __init__(self, embedding_model_name: str = "all-MiniLM-L6-v2", aws_region: str = "us-gov-west-1"):
+    def __init__(self, embedding_model_name: str = "amazon.titan-embed-text-v2:0", aws_region: str = "us-gov-west-1"):
         """
         Initialize the DocumentProcessor.
         

@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from langchain_chroma import Chroma
-from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_aws import BedrockEmbeddings
 from langchain.schema import Document
 from textract_processor import TextChunk
 
@@ -20,8 +20,12 @@ class ChromaVectorStore:
     def __init__(
         self,
         collection_name: str = "audit_documents",
-        embedding_model_name: str = "all-MiniLM-L6-v2",
-        persist_directory: Optional[str] = None
+        embedding_model_name: str = "amazon.titan-embed-text-v2:0",
+        persist_directory: Optional[str] = None,
+        aws_region: str = "us-gov-west-1",
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        aws_session_token: Optional[str] = None
     ):
         """
         Initialize the Chroma vector store.
@@ -30,14 +34,30 @@ class ChromaVectorStore:
             collection_name: Name of the collection to store documents
             embedding_model_name: Name of the embedding model to use
             persist_directory: Directory to persist the vector store (optional)
+            aws_region: AWS region for Bedrock
+            aws_access_key_id: AWS access key ID (optional if using IAM roles)
+            aws_secret_access_key: AWS secret access key (optional if using IAM roles)
+            aws_session_token: AWS session token (optional, used for temporary credentials)
         """
         self.collection_name = collection_name
         self.embedding_model_name = embedding_model_name
         
-        # Initialize embeddings
-        self.embeddings = SentenceTransformerEmbeddings(
-            model_name=embedding_model_name
-        )
+        # Initialize BedrockEmbeddings with credentials
+        embedding_kwargs = {
+            "model_id": embedding_model_name,
+            "region_name": aws_region
+        }
+        
+        # Add credentials if provided
+        if aws_access_key_id and aws_secret_access_key:
+            embedding_kwargs.update({
+                "aws_access_key_id": aws_access_key_id,
+                "aws_secret_access_key": aws_secret_access_key
+            })
+            if aws_session_token:
+                embedding_kwargs["aws_session_token"] = aws_session_token
+        
+        self.embeddings = BedrockEmbeddings(**embedding_kwargs)
         
         # Set up persist directory
         if persist_directory is None:
@@ -152,6 +172,13 @@ class ChromaVectorStore:
         Delete the entire collection.
         """
         self.vectorstore.delete_collection()
+    
+    def clear(self) -> None:
+        """
+        Clear all documents from the collection without deleting it.
+        Alias for clear_collection for backward compatibility.
+        """
+        self.clear_collection()
     
     def get_collection_stats(self) -> Dict[str, Any]:
         """

@@ -23,7 +23,7 @@ class RAGLangGraphAuditQA(BaseLangGraphAuditWorkflow):
         aws_session_token: Optional[str] = None,
         model_config: Optional[BedrockModelConfig] = None,
         vector_store: Optional[ChromaVectorStore] = None,
-        embedding_model_name: str = "all-MiniLM-L6-v2",
+        embedding_model_name: str = "amazon.titan-embed-text-v2:0",
         use_query_rewriting: bool = False
     ):
         """
