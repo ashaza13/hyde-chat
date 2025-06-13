@@ -10,7 +10,7 @@ from textract_processor import TextChunk
 from rag_audit import AuditQA as RagAuditQA
 
 def create_test_financial_data() -> List[TextChunk]:
-    """Create realistic financial document chunks for testing."""
+    """Create sample financial document chunks for testing."""
     
     chunks = [
         TextChunk(
@@ -26,7 +26,9 @@ Auxiliary enterprises                                                       $31,
 Other operating revenues                                                    $8,200,000
 Total operating revenues                                                   $191,000,000""",
             page_numbers=[3],
-            chunk_type="financial_statement"
+            start_page=3,
+            end_page=3,
+            chunk_index=0
         ),
         
         TextChunk(
@@ -44,7 +46,9 @@ Depreciation                                                               $15,1
 Total operating expenses                                                   $302,000,000
 Operating loss                                                            $(111,000,000)""",
             page_numbers=[3, 4],
-            chunk_type="financial_statement"
+            start_page=3,
+            end_page=4,
+            chunk_index=1
         ),
         
         TextChunk(
@@ -67,7 +71,9 @@ Increase in net position                                                   $20,0
 Net position - beginning of year                                         $485,300,000
 Net position - end of year                                               $505,300,000""",
             page_numbers=[4],
-            chunk_type="financial_statement"
+            start_page=4,
+            end_page=4,
+            chunk_index=2
         ),
         
         TextChunk(
@@ -87,7 +93,9 @@ Our responsibility is to express an opinion on these financial statements based 
 Opinion
 In our opinion, the financial statements referred to above present fairly, in all material respects, the financial position of State University as of June 30, 2023, and the changes in its net position and its cash flows for the year then ended in accordance with accounting principles generally accepted in the United States of America.""",
             page_numbers=[1, 2],
-            chunk_type="audit_report"
+            start_page=1,
+            end_page=2,
+            chunk_index=3
         ),
         
         TextChunk(
@@ -105,7 +113,9 @@ Cash and cash equivalents include cash on hand, demand deposits, and short-term 
 Investments
 Investments are reported at fair value based on quoted market prices. Investment income includes realized and unrealized gains and losses on investments.""",
             page_numbers=[8, 9],
-            chunk_type="notes"
+            start_page=8,
+            end_page=9,
+            chunk_index=4
         ),
         
         TextChunk(
@@ -125,7 +135,9 @@ Key Financial Ratios
 • Return on net assets: 4.1% (positive trend)
 • Net operating revenues ratio: -0.58 (typical for public universities due to reliance on state appropriations)""",
             page_numbers=[5, 6],
-            chunk_type="analysis"
+            start_page=5,
+            end_page=6,
+            chunk_index=5
         )
     ]
     
@@ -198,7 +210,7 @@ def test_rag_workflow(rag_qa: RagAuditQA, test_questions: List[str]) -> None:
             for j, (chunk, score) in enumerate(relevant_chunks):
                 print(f"  [{j+1}] Score: {score:.3f}")
                 print(f"      Page: {chunk.get_page_range_str()}")
-                print(f"      Type: {chunk.chunk_type}")
+                print(f"      Index: {chunk.chunk_index}")
                 print(f"      Preview: {chunk.text[:150]}...")
                 print()
             
