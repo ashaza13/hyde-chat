@@ -1,14 +1,19 @@
+"""
+LangGraph-based PDF Memory audit implementation.
+"""
+
 import json
 import re
 from typing import Optional, List, Dict, Any, Union, Tuple
 from pathlib import Path
 
-from common.core import BedrockClient, BedrockModelConfig
+from common.core import BaseLangGraphAuditWorkflow, AuditWorkflowState, ChromaVectorStore, BedrockModelConfig
 from textract_processor import TextChunk
+from .models import AuditResponse, AnswerType
 
-class AuditQA:
+class PDFMemoryLangGraphAuditQA(BaseLangGraphAuditWorkflow):
     """
-    Main class for answering audit questions using the full PDF document as context.
+    LangGraph-based PDF Memory audit QA implementation that uses the full document as context.
     """
     
     def __init__(
@@ -17,25 +22,30 @@ class AuditQA:
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_session_token: Optional[str] = None,
-        model_config: Optional[BedrockModelConfig] = None
+        model_config: Optional[BedrockModelConfig] = None,
+        vector_store: Optional[ChromaVectorStore] = None,
+        embedding_model_name: str = "all-MiniLM-L6-v2"
     ):
         """
-        Initialize the AuditQA service.
+        Initialize the PDF Memory LangGraph workflow.
         
         Args:
-            aws_region: AWS region to use
-            aws_access_key_id: AWS access key ID (optional if using IAM roles)
-            aws_secret_access_key: AWS secret access key (optional if using IAM roles)
-            aws_session_token: AWS session token (optional, used for temporary credentials)
-            model_config: Configuration for the Bedrock model
+            aws_region: AWS region for Bedrock
+            aws_access_key_id: AWS access key ID
+            aws_secret_access_key: AWS secret access key
+            aws_session_token: AWS session token
+            model_config: Bedrock model configuration
+            vector_store: Vector store instance
+            embedding_model_name: Embedding model name
         """
-        # Initialize the Bedrock client
-        self.bedrock_client = BedrockClient(
+        super().__init__(
             aws_region=aws_region,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
-            model_config=model_config
+            model_config=model_config,
+            vector_store=vector_store,
+            embedding_model_name=embedding_model_name
         )
         
         # Document text storage
@@ -54,10 +64,17 @@ class AuditQA:
         # Clear metadata when setting plain text
         self.chunks_with_metadata = []
         self.has_metadata = False
+        
+        # Clear vector store when setting plain text
+        if self.vector_store:
+            try:
+                self.vector_store.clear()
+            except Exception as e:
+                print(f"Warning: Could not clear vector store: {e}")
     
     def set_document_chunks_with_metadata(self, chunks: List[TextChunk]) -> None:
         """
-        Set document chunks with page metadata.
+        Set document chunks with page metadata and add them to the vector store.
         
         Args:
             chunks: List of TextChunk objects with page metadata
@@ -66,40 +83,50 @@ class AuditQA:
         self.has_metadata = True
         # Also set the document text for backward compatibility
         self.document_text = "\n\n".join(chunk.text for chunk in chunks)
+        
+        # Clear and re-populate vector store for consistency (even though Memory approach uses all chunks)
+        if self.vector_store:
+            try:
+                # Clear existing data to avoid stale chunks
+                self.vector_store.clear()
+                # Add new chunks
+                if chunks:
+                    self.vector_store.add_chunks(chunks)
+            except Exception as e:
+                print(f"Warning: Could not update vector store: {e}")
     
-    def answer_question(self, question_text: str, context: Optional[str] = None) -> 'AuditResponse':
+        def answer_question(self, question_text: str, context: Optional[str] = None) -> 'AuditResponse':
         """
-        Answer an audit question using the full document as context.
+        Answer an audit question using the PDF Memory LangGraph workflow.
         
         Args:
             question_text: The audit question text
             context: Optional additional context for the question
-            
+             
         Returns:
             An AuditResponse object with the answer, confidence, and explanation
         """
         # Import here to avoid circular imports
-        from .models import AuditQuestion, AuditResponse
+        from .models import AuditResponse, AnswerType
         
-        # Create question model
-        question = AuditQuestion(question=question_text, context=context)
+        # Run the workflow
+        results = self.run_workflow(
+            question=question_text,
+            context=context,
+            document_chunks=getattr(self, 'chunks_with_metadata', [])
+        )
         
-        # Use metadata-aware processing if available
-        if self.has_metadata and self.chunks_with_metadata:
-            return self._answer_with_metadata(question)
-        else:
-            # Fallback to original approach
-            document_text = self.document_text
-            
-            # Combine provided context with document text
-            if question.context:
-                full_context = f"{question.context}\n\n{document_text}"
-            else:
-                full_context = document_text
-            
-            # Get the final answer using the LLM
-            answer = self._get_final_answer(question.question, full_context)
-            return answer
+        # Convert to AuditResponse format
+        answer_type = AnswerType.YES if results["answer"] == "Yes" else \
+                     AnswerType.NO if results["answer"] == "No" else \
+                     AnswerType.NA
+        
+        return AuditResponse(
+            answer=answer_type,
+            confidence=results.get("confidence", 0.0),
+            explanation=results.get("explanation", ""),
+            page_references=results.get("page_references", [])
+        )
     
     def _answer_with_metadata(self, question) -> 'AuditResponse':
         """
@@ -193,7 +220,9 @@ Provide your response in the exact JSON format specified above. Your explanation
 """
         
         # Get response from LLM
-        response_text = self.bedrock_client.invoke_model(prompt)
+        from langchain.schema import HumanMessage
+        response = self.chat_model.invoke([HumanMessage(content=prompt)])
+        response_text = response.content
         
         # Parse the JSON response
         try:
@@ -256,7 +285,9 @@ Provide your response in the exact JSON format specified above. Your explanation
 """
         
         # Get response from LLM
-        response_text = self.bedrock_client.invoke_model(prompt)
+        from langchain.schema import HumanMessage
+        response = self.chat_model.invoke([HumanMessage(content=prompt)])
+        response_text = response.content
         
         # Parse the JSON response
         try:
@@ -317,4 +348,75 @@ Provide your response in the exact JSON format specified above. Your explanation
             answer=answer,
             confidence=confidence,
             explanation=explanation
-        ) 
+        )
+
+    def _build_workflow(self) -> StateGraph:
+        """
+        Build the PDF Memory-specific workflow graph.
+        
+        Returns:
+            StateGraph: The compiled workflow graph
+        """
+        workflow = StateGraph(AuditWorkflowState)
+        
+        # Add nodes for PDF Memory approach (uses all chunks)
+        workflow.add_node("process_question", self._process_question)
+        workflow.add_node("retrieve_all_context", self._retrieve_all_context)
+        workflow.add_node("generate_answer", self._generate_answer)
+        workflow.add_node("format_response", self._format_response)
+        
+        # Add edges for PDF Memory workflow
+        workflow.set_entry_point("process_question")
+        workflow.add_edge("process_question", "retrieve_all_context")
+        workflow.add_edge("retrieve_all_context", "generate_answer")
+        workflow.add_edge("generate_answer", "format_response")
+        workflow.add_edge("format_response", END)
+        
+        return workflow
+    
+    def _retrieve_all_context(self, state: AuditWorkflowState) -> AuditWorkflowState:
+        """
+        Retrieve all document chunks as context (PDF Memory approach).
+        
+        Args:
+            state: Current workflow state
+            
+        Returns:
+            Updated workflow state
+        """
+        # PDF Memory approach uses all chunks for comprehensive context
+        state["retrieved_chunks"] = state.get("document_chunks", [])
+        state["next_action"] = "generate_answer"
+        
+        return state
+    
+    def _create_answer_prompt(self, question: str, context: str) -> str:
+        """
+        Create a PDF Memory-specific prompt for answer generation.
+        
+        Args:
+            question: The audit question
+            context: The context with citations
+            
+        Returns:
+            Formatted prompt string
+        """
+        return f"""You are an expert auditor specializing in higher education financial statements. You are tasked with answering questions about financial audits with ONLY "Yes", "No", or "N/A" (if the question is not applicable or cannot be determined from the available information).
+
+This analysis uses the PDF Memory approach, where the full document content is provided as context to ensure comprehensive coverage.
+
+I will provide you with a question and the complete context from financial statements or audit reports. The context includes numbered citations [1], [2], etc. that correspond to specific page references.
+
+You must provide your answer in the following JSON format:
+{{
+  "answer": "Yes" | "No" | "N/A",
+  "confidence": <float between 0 and 1>,
+  "explanation": "<detailed explanation supporting your answer, including page references when citing specific information>"
+}}
+
+Question: {question}
+
+Context:
+{context if context else "No specific context provided"}
+
+Provide your response in the exact JSON format specified above. Your explanation should reference the page citations when discussing specific information.""" 

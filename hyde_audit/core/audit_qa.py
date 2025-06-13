@@ -3,14 +3,16 @@ import re
 from typing import Optional, List, Dict, Any, Union, Tuple
 from pathlib import Path
 
-from common.core import BedrockClient, BedrockModelConfig
+from common.core import BedrockModelConfig
 from textract_processor import TextChunk
 from .models import AuditQuestion, AuditResponse, AnswerType
+from langgraph.graph import StateGraph, END
+from common.core import BaseLangGraphAuditWorkflow, AuditWorkflowState, ChromaVectorStore
 
 
-class AuditQA:
+class HyDELangGraphAuditQA(BaseLangGraphAuditWorkflow):
     """
-    Main class for answering audit questions using the HyDE (Hypothetical Document Embeddings) approach.
+    LangGraph-based HyDE audit QA implementation using hypothetical document embeddings.
     """
     
     def __init__(
@@ -20,33 +22,31 @@ class AuditQA:
         aws_secret_access_key: Optional[str] = None,
         aws_session_token: Optional[str] = None,
         model_config: Optional[BedrockModelConfig] = None,
+        vector_store: Optional[ChromaVectorStore] = None,
         embedding_model_name: str = "all-MiniLM-L6-v2"
     ):
         """
-        Initialize the AuditQA service.
+        Initialize the HyDE LangGraph workflow.
         
         Args:
-            aws_region: AWS region to use
-            aws_access_key_id: AWS access key ID (optional if using IAM roles)
-            aws_secret_access_key: AWS secret access key (optional if using IAM roles)
-            aws_session_token: AWS session token (optional, used for temporary credentials)
-            model_config: Configuration for the Bedrock model
-            embedding_model_name: Name of the embedding model to use
+            aws_region: AWS region for Bedrock
+            aws_access_key_id: AWS access key ID
+            aws_secret_access_key: AWS secret access key
+            aws_session_token: AWS session token
+            model_config: Bedrock model configuration
+            vector_store: Vector store instance
+            embedding_model_name: Embedding model name
         """
-        # Initialize the Bedrock client
-        self.bedrock_client = BedrockClient(
+        super().__init__(
             aws_region=aws_region,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
-            model_config=model_config
+            model_config=model_config,
+            vector_store=vector_store,
+            embedding_model_name=embedding_model_name
         )
-        
-        # Document text storage
-        self.document_text = ""
-        self.chunks_with_metadata = []
-        self.has_metadata = False
-    
+
     def set_document_text(self, document_text: str) -> None:
         """
         Set the document text to use as context.
@@ -58,10 +58,17 @@ class AuditQA:
         # Clear metadata when setting plain text
         self.chunks_with_metadata = []
         self.has_metadata = False
+        
+        # Clear vector store when setting plain text
+        if self.vector_store:
+            try:
+                self.vector_store.clear()
+            except Exception as e:
+                print(f"Warning: Could not clear vector store: {e}")
     
     def set_document_chunks_with_metadata(self, chunks: List[TextChunk]) -> None:
         """
-        Set document chunks with page metadata.
+        Set document chunks with page metadata and add them to the vector store.
         
         Args:
             chunks: List of TextChunk objects with page metadata
@@ -70,11 +77,21 @@ class AuditQA:
         self.has_metadata = True
         # Also set the document text for backward compatibility
         self.document_text = "\n\n".join(chunk.text for chunk in chunks)
+        
+        # Clear and re-populate vector store for semantic search
+        if self.vector_store:
+            try:
+                # Clear existing data to avoid stale chunks
+                self.vector_store.clear()
+                # Add new chunks
+                if chunks:
+                    self.vector_store.add_chunks(chunks)
+            except Exception as e:
+                print(f"Warning: Could not update vector store: {e}")
     
     def get_relevant_chunks_for_hypothetical(self, hypothetical_doc: str, top_k: int = 3) -> List[Tuple[TextChunk, float]]:
         """
-        Get the most relevant chunks for a hypothetical document using simple keyword matching.
-        In a real implementation, this would use vector embeddings.
+        Get the most relevant chunks for a hypothetical document using vector store semantic search.
         
         Args:
             hypothetical_doc: The hypothetical document to find relevant chunks for
@@ -83,10 +100,18 @@ class AuditQA:
         Returns:
             List of tuples with (TextChunk, relevance_score)
         """
+        # Use vector store for semantic search if available
+        if self.vector_store and self.has_metadata:
+            try:
+                return self.vector_store.similarity_search(hypothetical_doc, k=top_k)
+            except Exception as e:
+                print(f"Vector search failed, falling back to keyword matching: {e}")
+        
+        # Fallback to keyword-based matching if vector store is not available
         if not self.chunks_with_metadata:
             return []
         
-        # Simple keyword-based relevance scoring
+        # Simple keyword-based relevance scoring as fallback
         hyp_words = set(hypothetical_doc.lower().split())
         scored_chunks = []
         
@@ -124,12 +149,14 @@ Question: {question}
 Generate a detailed, realistic extract from a financial statement or audit report that would help answer this question:"""
         
         # Generate the hypothetical document
-        hypothetical_doc = self.bedrock_client.invoke_model(prompt)
+        from langchain.schema import HumanMessage
+        response = self.chat_model.invoke([HumanMessage(content=prompt)])
+        hypothetical_doc = response.content
         return hypothetical_doc
     
     def answer_question(self, question_text: str, context: Optional[str] = None) -> AuditResponse:
         """
-        Answer an audit question using the HyDE approach.
+        Answer an audit question using the HYDE LangGraph workflow.
         
         Args:
             question_text: The audit question text
@@ -138,28 +165,24 @@ Generate a detailed, realistic extract from a financial statement or audit repor
         Returns:
             An AuditResponse object with the answer, confidence, and explanation
         """
-        # Create question model
-        question = AuditQuestion(question=question_text, context=context)
+        # Run the workflow
+        results = self.run_workflow(
+            question=question_text,
+            context=context,
+            document_chunks=getattr(self, 'chunks_with_metadata', [])
+        )
         
-        # Generate a hypothetical document
-        hypothetical_doc = self.generate_hypothetical_document(question.question)
+        # Convert to AuditResponse format
+        answer_type = AnswerType.YES if results["answer"] == "Yes" else \
+                     AnswerType.NO if results["answer"] == "No" else \
+                     AnswerType.NA
         
-        # Use metadata-aware processing if available
-        if self.has_metadata and self.chunks_with_metadata:
-            return self._answer_with_metadata(question, hypothetical_doc)
-        else:
-            # Fallback to original approach
-            document_text = self.document_text
-            
-            # Combine all context
-            if question.context:
-                full_context = f"{question.context}\n\n{document_text}"
-            else:
-                full_context = document_text
-            
-            # Get the final answer using the LLM
-            answer = self._get_final_answer(question.question, full_context)
-            return answer
+        return AuditResponse(
+            answer=answer_type,
+            confidence=results.get("confidence", 0.0),
+            explanation=results.get("explanation", ""),
+            page_references=results.get("page_references", [])
+        )
     
     def _answer_with_metadata(self, question: AuditQuestion, hypothetical_doc: str) -> AuditResponse:
         """
@@ -260,7 +283,9 @@ Provide your response in the exact JSON format specified above. Your explanation
 """
         
         # Get response from LLM
-        response_text = self.bedrock_client.invoke_model(prompt)
+        from langchain.schema import HumanMessage
+        response = self.chat_model.invoke([HumanMessage(content=prompt)])
+        response_text = response.content
         
         # Parse the JSON response
         try:
@@ -320,7 +345,9 @@ Provide your response in the exact JSON format specified above. Your explanation
 """
         
         # Get response from LLM
-        response_text = self.bedrock_client.invoke_model(prompt)
+        from langchain.schema import HumanMessage
+        response = self.chat_model.invoke([HumanMessage(content=prompt)])
+        response_text = response.content
         
         # Parse the JSON response
         try:
@@ -378,4 +405,141 @@ Provide your response in the exact JSON format specified above. Your explanation
             answer=answer,
             confidence=confidence,
             explanation=explanation
-        ) 
+        )
+
+    def _build_workflow(self) -> StateGraph:
+        """
+        Build the HYDE-specific workflow graph.
+        
+        Returns:
+            StateGraph: The compiled workflow graph
+        """
+        workflow = StateGraph(AuditWorkflowState)
+        
+        # Add nodes specific to HYDE approach
+        workflow.add_node("process_question", self._process_question)
+        workflow.add_node("generate_hypothetical_doc", self._generate_hypothetical_doc)
+        workflow.add_node("retrieve_context", self._retrieve_context_hyde)
+        workflow.add_node("generate_answer", self._generate_answer)
+        workflow.add_node("format_response", self._format_response)
+        
+        # Add edges for HYDE workflow
+        workflow.set_entry_point("process_question")
+        workflow.add_edge("process_question", "generate_hypothetical_doc")
+        workflow.add_edge("generate_hypothetical_doc", "retrieve_context")
+        workflow.add_edge("retrieve_context", "generate_answer")
+        workflow.add_edge("generate_answer", "format_response")
+        workflow.add_edge("format_response", END)
+        
+        return workflow
+    
+    def _generate_hypothetical_doc(self, state: AuditWorkflowState) -> AuditWorkflowState:
+        """
+        Generate a hypothetical document that would answer the question.
+        This is the core of the HYDE approach.
+        
+        Args:
+            state: Current workflow state
+            
+        Returns:
+            Updated workflow state
+        """
+        try:
+            # Create prompt for generating hypothetical document
+            prompt = f"""You are an expert auditor specializing in higher education financial statements.
+
+I'm going to ask you a question about a financial audit, and I'd like you to generate a hypothetical extract from a financial statement or audit report that would help answer this question.
+
+The extract should be detailed, specific, and realistic - as if it came from an actual higher education institution's financial statement.
+
+Question: {state['question']}
+
+Generate a detailed, realistic extract from a financial statement or audit report that would help answer this question:"""
+
+            # Generate the hypothetical document
+            from langchain.schema import HumanMessage
+            response = self.chat_model.invoke([HumanMessage(content=prompt)])
+            hypothetical_doc = response.content
+            state["hypothetical_doc"] = hypothetical_doc
+            state["next_action"] = "retrieve_context"
+            
+        except Exception as e:
+            state["error"] = f"Error generating hypothetical document: {str(e)}"
+            state["hypothetical_doc"] = None
+        
+        return state
+    
+    def _retrieve_context_hyde(self, state: AuditWorkflowState) -> AuditWorkflowState:
+        """
+        Retrieve relevant context using the hypothetical document for better retrieval.
+        
+        Args:
+            state: Current workflow state
+            
+        Returns:
+            Updated workflow state
+        """
+        try:
+            if state.get("hypothetical_doc") and state.get("document_chunks"):
+                # Use hypothetical document for vector search
+                search_results = self.vector_store.similarity_search(
+                    query=state["hypothetical_doc"],
+                    k=3
+                )
+                
+                # Extract chunks and scores
+                retrieved_chunks = []
+                for chunk, score in search_results:
+                    retrieved_chunks.append(chunk)
+                
+                state["retrieved_chunks"] = retrieved_chunks
+            else:
+                # Fallback: use question directly for search or use all chunks
+                if state.get("document_chunks"):
+                    search_results = self.vector_store.similarity_search(
+                        query=state["question"],
+                        k=3
+                    )
+                    state["retrieved_chunks"] = [chunk for chunk, score in search_results]
+                else:
+                    state["retrieved_chunks"] = []
+            
+            state["next_action"] = "generate_answer"
+            
+        except Exception as e:
+            # Fallback to using all chunks if vector search fails
+            state["retrieved_chunks"] = state.get("document_chunks", [])[:3]
+            state["error"] = f"Vector search failed, using fallback: {str(e)}"
+        
+        return state
+    
+    def _create_answer_prompt(self, question: str, context: str) -> str:
+        """
+        Create a HYDE-specific prompt for answer generation.
+        
+        Args:
+            question: The audit question
+            context: The context with citations
+            
+        Returns:
+            Formatted prompt string
+        """
+        return f"""You are an expert auditor specializing in higher education financial statements. You are tasked with answering questions about financial audits with ONLY "Yes", "No", or "N/A" (if the question is not applicable or cannot be determined from the available information).
+
+This analysis uses the HYDE (Hypothetical Document Embeddings) approach, where relevant context was retrieved based on a hypothetical document that would answer your question.
+
+I will provide you with a question and context from financial statements or audit reports. The context includes numbered citations [1], [2], etc. that correspond to specific page references.
+
+You must provide your answer in the following JSON format:
+{{
+  "answer": "Yes" | "No" | "N/A",
+  "confidence": <float between 0 and 1>,
+  "explanation": "<detailed explanation supporting your answer, including page references when citing specific information>"
+}}
+
+Question: {question}
+
+Context:
+{context if context else "No specific context provided"}
+
+Provide your response in the exact JSON format specified above. Your explanation should reference the page citations when discussing specific information.""" 

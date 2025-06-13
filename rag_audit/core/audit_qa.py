@@ -3,14 +3,16 @@ import re
 from typing import Optional, List, Dict, Any, Union, Tuple
 from pathlib import Path
 
-from common.core import BedrockClient, BedrockModelConfig
+from common.core import BedrockModelConfig
 from textract_processor import TextChunk
 from .models import AuditQuestion, AuditResponse, AnswerType
+from langgraph.graph import StateGraph, END
+from common.core import BaseLangGraphAuditWorkflow, AuditWorkflowState, ChromaVectorStore
 
 
-class AuditQA:
+class RAGLangGraphAuditQA(BaseLangGraphAuditWorkflow):
     """
-    Main class for answering audit questions using the RAG (Retrieval-Augmented Generation) approach.
+    LangGraph-based RAG audit QA implementation with query rewriting capabilities.
     """
     
     def __init__(
@@ -20,38 +22,225 @@ class AuditQA:
         aws_secret_access_key: Optional[str] = None,
         aws_session_token: Optional[str] = None,
         model_config: Optional[BedrockModelConfig] = None,
+        vector_store: Optional[ChromaVectorStore] = None,
         embedding_model_name: str = "all-MiniLM-L6-v2",
         use_query_rewriting: bool = False
     ):
         """
-        Initialize the AuditQA service.
+        Initialize the RAG LangGraph workflow.
         
         Args:
-            aws_region: AWS region to use
-            aws_access_key_id: AWS access key ID (optional if using IAM roles)
-            aws_secret_access_key: AWS secret access key (optional if using IAM roles)
-            aws_session_token: AWS session token (optional, used for temporary credentials)
-            model_config: Configuration for the Bedrock model
-            embedding_model_name: Name of the embedding model to use
-            use_query_rewriting: Whether to use query rewriting for better vector DB retrieval
+            aws_region: AWS region for Bedrock
+            aws_access_key_id: AWS access key ID
+            aws_secret_access_key: AWS secret access key
+            aws_session_token: AWS session token
+            model_config: Bedrock model configuration
+            vector_store: Vector store instance
+            embedding_model_name: Embedding model name
+            use_query_rewriting: Whether to use query rewriting for better retrieval
         """
-        # Initialize the Bedrock client
-        self.bedrock_client = BedrockClient(
+        self.use_query_rewriting = use_query_rewriting
+        
+        super().__init__(
             aws_region=aws_region,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
-            model_config=model_config
+            model_config=model_config,
+            vector_store=vector_store,
+            embedding_model_name=embedding_model_name
         )
+
+    def _build_workflow(self) -> StateGraph:
+        """
+        Build the RAG-specific workflow graph.
         
-        # Document text storage
-        self.document_text = ""
-        self.chunks_with_metadata = []
-        self.has_metadata = False
+        Returns:
+            StateGraph: The compiled workflow graph
+        """
+        workflow = StateGraph(AuditWorkflowState)
         
-        # Query rewriting flag
-        self.use_query_rewriting = use_query_rewriting
+        # Add nodes for RAG approach
+        workflow.add_node("process_question", self._process_question)
+        
+        if self.use_query_rewriting:
+            workflow.add_node("rewrite_query", self._rewrite_query)
+            workflow.add_node("retrieve_context", self._retrieve_context_with_rewritten_query)
+        else:
+            workflow.add_node("retrieve_context", self._retrieve_context_rag)
+        
+        workflow.add_node("generate_answer", self._generate_answer)
+        workflow.add_node("format_response", self._format_response)
+        
+        # Add edges for RAG workflow
+        workflow.set_entry_point("process_question")
+        
+        if self.use_query_rewriting:
+            workflow.add_edge("process_question", "rewrite_query")
+            workflow.add_edge("rewrite_query", "retrieve_context")
+        else:
+            workflow.add_edge("process_question", "retrieve_context")
+        
+        workflow.add_edge("retrieve_context", "generate_answer")
+        workflow.add_edge("generate_answer", "format_response")
+        workflow.add_edge("format_response", END)
+        
+        return workflow
     
+    def _rewrite_query(self, state: AuditWorkflowState) -> AuditWorkflowState:
+        """
+        Rewrite the query for better vector retrieval.
+        
+        Args:
+            state: Current workflow state
+            
+        Returns:
+            Updated workflow state
+        """
+        try:
+            prompt = f"""You are an expert at optimizing queries for semantic vector search retrieval in the financial auditing domain.
+
+Given an original query, rewrite it to be more effective for retrieving relevant financial audit information from a vector database.
+
+Guidelines for rewriting:
+1. Expand with relevant financial audit terminology and keywords that might appear in financial statements
+2. Remove conversational elements, questions, and filler words
+3. Focus on the core information needs and entities
+4. Use specific financial statement terminology where appropriate
+5. Maintain all important concepts from the original query
+6. Keep the rewritten query concise (typically 1-3 sentences)
+
+Original query: {state['question']}
+
+Rewritten query for vector search (just return the rewritten query without explanation or additional text):"""
+
+            # Get response from LLM
+            from langchain.schema import HumanMessage
+            response = self.chat_model.invoke([HumanMessage(content=prompt)])
+            rewritten_query = response.content
+            
+            # Clean up the response
+            rewritten_query = rewritten_query.strip().strip('"\'')
+            
+            # Store both queries in state
+            state["rewritten_question"] = rewritten_query
+            state["next_action"] = "retrieve_context"
+            
+        except Exception as e:
+            state["error"] = f"Error rewriting query: {str(e)}"
+            state["rewritten_question"] = state["question"]  # Fallback
+        
+        return state
+    
+    def _retrieve_context_rag(self, state: AuditWorkflowState) -> AuditWorkflowState:
+        """
+        Retrieve relevant context using direct vector search.
+        
+        Args:
+            state: Current workflow state
+            
+        Returns:
+            Updated workflow state
+        """
+        try:
+            if state.get("document_chunks"):
+                # Use direct question for vector search
+                search_results = self.vector_store.similarity_search(
+                    query=state["question"],
+                    k=3
+                )
+                
+                # Extract chunks and scores
+                retrieved_chunks = []
+                for chunk, score in search_results:
+                    retrieved_chunks.append(chunk)
+                
+                state["retrieved_chunks"] = retrieved_chunks
+            else:
+                state["retrieved_chunks"] = []
+            
+            state["next_action"] = "generate_answer"
+            
+        except Exception as e:
+            # Fallback to using all chunks if vector search fails
+            state["retrieved_chunks"] = state.get("document_chunks", [])[:3]
+            state["error"] = f"Vector search failed, using fallback: {str(e)}"
+        
+        return state
+    
+    def _retrieve_context_with_rewritten_query(self, state: AuditWorkflowState) -> AuditWorkflowState:
+        """
+        Retrieve relevant context using the rewritten query.
+        
+        Args:
+            state: Current workflow state
+            
+        Returns:
+            Updated workflow state
+        """
+        try:
+            if state.get("document_chunks"):
+                # Use rewritten query for vector search
+                search_query = state.get("rewritten_question", state["question"])
+                search_results = self.vector_store.similarity_search(
+                    query=search_query,
+                    k=3
+                )
+                
+                # Extract chunks and scores
+                retrieved_chunks = []
+                for chunk, score in search_results:
+                    retrieved_chunks.append(chunk)
+                
+                state["retrieved_chunks"] = retrieved_chunks
+            else:
+                state["retrieved_chunks"] = []
+            
+            state["next_action"] = "generate_answer"
+            
+        except Exception as e:
+            # Fallback to using all chunks if vector search fails
+            state["retrieved_chunks"] = state.get("document_chunks", [])[:3]
+            state["error"] = f"Vector search failed, using fallback: {str(e)}"
+        
+        return state
+    
+    def _create_answer_prompt(self, question: str, context: str) -> str:
+        """
+        Create a RAG-specific prompt for answer generation.
+        
+        Args:
+            question: The audit question
+            context: The context with citations
+            
+        Returns:
+            Formatted prompt string
+        """
+        approach_description = "This analysis uses the RAG (Retrieval-Augmented Generation) approach"
+        if self.use_query_rewriting:
+            approach_description += " with query rewriting for optimized vector search"
+        approach_description += ", where the most relevant document sections are retrieved based on semantic similarity."
+        
+        return f"""You are an expert auditor specializing in higher education financial statements. You are tasked with answering questions about financial audits with ONLY "Yes", "No", or "N/A" (if the question is not applicable or cannot be determined from the available information).
+
+{approach_description}
+
+I will provide you with a question and context from financial statements or audit reports. The context includes numbered citations [1], [2], etc. that correspond to specific page references.
+
+You must provide your answer in the following JSON format:
+{{
+  "answer": "Yes" | "No" | "N/A",
+  "confidence": <float between 0 and 1>,
+  "explanation": "<detailed explanation supporting your answer, including page references when citing specific information>"
+}}
+
+Question: {question}
+
+Context:
+{context if context else "No specific context provided"}
+
+Provide your response in the exact JSON format specified above. Your explanation should reference the page citations when discussing specific information."""
+
     def set_document_text(self, document_text: str) -> None:
         """
         Set the document text to use as context.
@@ -63,10 +252,17 @@ class AuditQA:
         # Clear metadata when setting plain text
         self.chunks_with_metadata = []
         self.has_metadata = False
+        
+        # Clear vector store when setting plain text
+        if self.vector_store:
+            try:
+                self.vector_store.clear()
+            except Exception as e:
+                print(f"Warning: Could not clear vector store: {e}")
     
     def set_document_chunks_with_metadata(self, chunks: List[TextChunk]) -> None:
         """
-        Set document chunks with page metadata.
+        Set document chunks with page metadata and add them to the vector store.
         
         Args:
             chunks: List of TextChunk objects with page metadata
@@ -75,11 +271,21 @@ class AuditQA:
         self.has_metadata = True
         # Also set the document text for backward compatibility
         self.document_text = "\n\n".join(chunk.text for chunk in chunks)
+        
+        # Clear and re-populate vector store for semantic search
+        if self.vector_store:
+            try:
+                # Clear existing data to avoid stale chunks
+                self.vector_store.clear()
+                # Add new chunks
+                if chunks:
+                    self.vector_store.add_chunks(chunks)
+            except Exception as e:
+                print(f"Warning: Could not update vector store: {e}")
     
     def get_relevant_chunks(self, query: str, top_k: int = 3) -> List[Tuple[TextChunk, float]]:
         """
-        Get the most relevant chunks for a query using simple keyword matching.
-        In a real implementation, this would use vector embeddings.
+        Get the most relevant chunks for a query using vector store semantic search.
         
         Args:
             query: The query to find relevant chunks for
@@ -88,10 +294,18 @@ class AuditQA:
         Returns:
             List of tuples with (TextChunk, relevance_score)
         """
+        # Use vector store for semantic search if available
+        if self.vector_store and self.has_metadata:
+            try:
+                return self.vector_store.similarity_search(query, k=top_k)
+            except Exception as e:
+                print(f"Vector search failed, falling back to keyword matching: {e}")
+        
+        # Fallback to keyword-based matching if vector store is not available
         if not self.chunks_with_metadata:
             return []
         
-        # Simple keyword-based relevance scoring
+        # Simple keyword-based relevance scoring as fallback
         query_words = set(query.lower().split())
         scored_chunks = []
         
@@ -140,7 +354,9 @@ Original query: {original_query}
 Rewritten query for vector search (just return the rewritten query without explanation or additional text):"""
 
         # Get response from LLM
-        rewritten_query = self.bedrock_client.invoke_model(prompt)
+        from langchain.schema import HumanMessage
+        response = self.chat_model.invoke([HumanMessage(content=prompt)])
+        rewritten_query = response.content
         
         # Clean up the response (remove quotes, extra whitespace, etc.)
         rewritten_query = rewritten_query.strip().strip('"\'')
@@ -149,7 +365,7 @@ Rewritten query for vector search (just return the rewritten query without expla
     
     def answer_question(self, question_text: str, context: Optional[str] = None, use_query_rewriting: Optional[bool] = None) -> AuditResponse:
         """
-        Answer an audit question using the RAG approach.
+        Answer an audit question using the RAG LangGraph workflow.
         
         Args:
             question_text: The audit question text
@@ -159,35 +375,40 @@ Rewritten query for vector search (just return the rewritten query without expla
         Returns:
             An AuditResponse object with the answer, confidence, and explanation
         """
-        # Create question model
-        question = AuditQuestion(question=question_text, context=context)
+        # Temporarily override query rewriting setting if provided
+        original_query_rewriting = self.use_query_rewriting
+        if use_query_rewriting is not None:
+            self.use_query_rewriting = use_query_rewriting
+            # Rebuild workflow with new setting
+            self.workflow = self._build_workflow()
+            self.app = self.workflow.compile()
         
-        # Determine whether to use query rewriting
-        should_rewrite = use_query_rewriting if use_query_rewriting is not None else self.use_query_rewriting
-        
-        # Rewrite the query if enabled
-        search_query = question.question
-        if should_rewrite:
-            search_query = self.rewrite_query_for_vector_search(question.question)
-            print(f"Original query: {question.question}")
-            print(f"Rewritten query: {search_query}")
-        
-        # Use metadata-aware processing if available
-        if self.has_metadata and self.chunks_with_metadata:
-            return self._answer_with_metadata(question, search_query if should_rewrite else None)
-        else:
-            # Fallback to original approach
-            document_text = self.document_text
+        try:
+            # Run the workflow
+            results = self.run_workflow(
+                question=question_text,
+                context=context,
+                document_chunks=getattr(self, 'chunks_with_metadata', [])
+            )
             
-            # Combine all context
-            if question.context:
-                full_context = f"{question.context}\n\n{document_text}"
-            else:
-                full_context = document_text
+            # Convert to AuditResponse format
+            answer_type = AnswerType.YES if results["answer"] == "Yes" else \
+                         AnswerType.NO if results["answer"] == "No" else \
+                         AnswerType.NA
             
-            # Get the final answer using the LLM
-            answer = self._get_final_answer(question.question, full_context, search_query if should_rewrite else None)
-            return answer
+            return AuditResponse(
+                answer=answer_type,
+                confidence=results.get("confidence", 0.0),
+                explanation=results.get("explanation", ""),
+                page_references=results.get("page_references", [])
+            )
+        
+        finally:
+            # Restore original query rewriting setting
+            if use_query_rewriting is not None:
+                self.use_query_rewriting = original_query_rewriting
+                self.workflow = self._build_workflow()
+                self.app = self.workflow.compile()
     
     def _answer_with_metadata(self, question: AuditQuestion, rewritten_query: Optional[str] = None) -> AuditResponse:
         """
@@ -294,7 +515,9 @@ Provide your response in the exact JSON format specified above. Your explanation
 """
         
         # Get response from LLM
-        response_text = self.bedrock_client.invoke_model(prompt)
+        from langchain.schema import HumanMessage
+        response = self.chat_model.invoke([HumanMessage(content=prompt)])
+        response_text = response.content
         
         # Parse the JSON response
         try:
@@ -359,7 +582,9 @@ Provide your response in the exact JSON format specified above. Your explanation
 """
         
         # Get response from LLM
-        response_text = self.bedrock_client.invoke_model(prompt)
+        from langchain.schema import HumanMessage
+        response = self.chat_model.invoke([HumanMessage(content=prompt)])
+        response_text = response.content
         
         # Parse the JSON response
         try:

@@ -8,7 +8,7 @@ import argparse
 from typing import Optional, List, Dict
 import pandas as pd
 
-from common.core import DocumentProcessor
+from common.core import DocumentProcessor, BedrockModelConfig, ChromaVectorStore
 from pdf_memory_audit import AuditQA as MemoryAuditQA
 from rag_audit import AuditQA as RagAuditQA
 from hyde_audit import AuditQA as HydeAuditQA
@@ -26,7 +26,9 @@ class AuditProcessor:
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_session_token: Optional[str] = None,
-        use_rag_query_rewriting: bool = False
+        use_rag_query_rewriting: bool = False,
+        model_config: Optional[BedrockModelConfig] = None,
+        vector_store: Optional[ChromaVectorStore] = None
     ):
         """
         Initialize the AuditProcessor.
@@ -37,12 +39,29 @@ class AuditProcessor:
             aws_secret_access_key: AWS secret access key (optional if using IAM roles)
             aws_session_token: AWS session token (optional, used for temporary credentials)
             use_rag_query_rewriting: Whether to use query rewriting for the RAG approach
+            model_config: Bedrock model configuration
+            vector_store: Shared vector store instance
         """
         self.aws_region = aws_region
         self.aws_access_key_id = aws_access_key_id
         self.aws_secret_access_key = aws_secret_access_key
         self.aws_session_token = aws_session_token
         self.use_rag_query_rewriting = use_rag_query_rewriting
+        
+        # Create default model config if not provided
+        if model_config is None:
+            model_config = BedrockModelConfig(
+                model_id="anthropic.claude-3-sonnet-20240229-v1:0",
+                max_tokens=4000,
+                temperature=0.0
+            )
+        
+        # Create shared vector store if not provided
+        if vector_store is None:
+            vector_store = ChromaVectorStore(
+                collection_name="audit_documents",
+                embedding_model_name="all-MiniLM-L6-v2"
+            )
         
         # Initialize the central document processor
         self.document_processor = DocumentProcessor(
@@ -52,12 +71,14 @@ class AuditProcessor:
             aws_session_token=aws_session_token
         )
         
-        # Initialize audit clients
+        # Initialize audit clients with LangGraph implementations
         self.memory_qa = MemoryAuditQA(
             aws_region=aws_region,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token
+            aws_session_token=aws_session_token,
+            model_config=model_config,
+            vector_store=vector_store
         )
         
         self.rag_qa = RagAuditQA(
@@ -65,6 +86,8 @@ class AuditProcessor:
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
+            model_config=model_config,
+            vector_store=vector_store,
             use_query_rewriting=use_rag_query_rewriting
         )
         
@@ -72,7 +95,9 @@ class AuditProcessor:
             aws_region=aws_region,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token
+            aws_session_token=aws_session_token,
+            model_config=model_config,
+            vector_store=vector_store
         )
         
         # Document loading status
@@ -276,11 +301,11 @@ class AuditProcessor:
         )
         
         # Update the question with the response
-        if response.answer == "Yes":
+        if response.answer.value == "Yes":
             question.rag_answer = AnswerType.YES
-        elif response.answer == "No":
+        elif response.answer.value == "No":
             question.rag_answer = AnswerType.NO
-        elif response.answer == "N/A":
+        elif response.answer.value == "N/A":
             question.rag_answer = AnswerType.NA
         else:
             question.rag_answer = AnswerType.UNKNOWN
@@ -337,11 +362,11 @@ class AuditProcessor:
         response = self.memory_qa.answer_question(question.text, context=dependency_context)
         
         # Update the question with the response
-        if response.answer == "Yes":
+        if response.answer.value == "Yes":
             question.context_answer = AnswerType.YES
-        elif response.answer == "No":
+        elif response.answer.value == "No":
             question.context_answer = AnswerType.NO
-        elif response.answer == "N/A":
+        elif response.answer.value == "N/A":
             question.context_answer = AnswerType.NA
         else:
             question.context_answer = AnswerType.UNKNOWN
@@ -398,11 +423,11 @@ class AuditProcessor:
         response = self.hyde_qa.answer_question(question.text, context=dependency_context)
         
         # Update the question with the response
-        if response.answer == "Yes":
+        if response.answer.value == "Yes":
             question.hyde_answer = AnswerType.YES
-        elif response.answer == "No":
+        elif response.answer.value == "No":
             question.hyde_answer = AnswerType.NO
-        elif response.answer == "N/A":
+        elif response.answer.value == "N/A":
             question.hyde_answer = AnswerType.NA
         else:
             question.hyde_answer = AnswerType.UNKNOWN
@@ -556,13 +581,21 @@ def main():
     # Parse approaches
     approaches = [a.strip() for a in args.approaches.split(",")]
     
+    # Create model configuration
+    model_config = BedrockModelConfig(
+        model_id="anthropic.claude-3-sonnet-20240229-v1:0",
+        max_tokens=4000,
+        temperature=0.0
+    )
+    
     # Initialize processor
     processor = AuditProcessor(
         aws_region=args.region,
         aws_access_key_id=aws_access_key_id,
         aws_secret_access_key=aws_secret_access_key,
         aws_session_token=aws_session_token,
-        use_rag_query_rewriting=args.use_rag_query_rewriting
+        use_rag_query_rewriting=args.use_rag_query_rewriting,
+        model_config=model_config
     )
     
     # Load document

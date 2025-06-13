@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from audit_processor import AuditProcessor
-from common.core import BedrockModelConfig
+from common.core import BedrockModelConfig, ChromaVectorStore
 from question_structure import QuestionTree, AnswerType
 
 
@@ -69,18 +69,21 @@ def load_questions_from_csv(csv_file) -> Optional[pd.DataFrame]:
 def create_processor(aws_credentials: Dict[str, str], model_config: BedrockModelConfig, use_rag_query_rewriting: bool = False) -> Optional[AuditProcessor]:
     """Create an AuditProcessor with the given credentials and configuration."""
     try:
+        # Create shared vector store for all approaches
+        vector_store = ChromaVectorStore(
+            collection_name="streamlit_audit_docs",
+            embedding_model_name="all-MiniLM-L6-v2"
+        )
+        
         processor = AuditProcessor(
             aws_region=aws_credentials.get('region', 'us-gov-west-1'),
             aws_access_key_id=aws_credentials.get('access_key_id'),
             aws_secret_access_key=aws_credentials.get('secret_access_key'),
             aws_session_token=aws_credentials.get('session_token'),
-            use_rag_query_rewriting=use_rag_query_rewriting
+            use_rag_query_rewriting=use_rag_query_rewriting,
+            model_config=model_config,
+            vector_store=vector_store
         )
-        
-        # Update model configurations for all approaches
-        processor.memory_qa.bedrock_client.model_config = model_config
-        processor.rag_qa.bedrock_client.model_config = model_config
-        processor.hyde_qa.bedrock_client.model_config = model_config
         
         return processor
     except Exception as e:
